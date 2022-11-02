@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-Zenh87qX5JnK2Jl0vWa8Ck2rdkQ2Bzep5IDxbcnCeuOxjzrPF/et3URy9Bv1WTRi" crossorigin="anonymous">
+        <link rel="stylesheet" href="{{ url_for('static', filename='css/view-tasks.css')}}">
+        <title>View Tasks</title>
+    </head>
+    <body>
+        <div class="wrapper">
+          <h1>View Tasks</h1>
+          <div class="list-group">
+              {% set counter = namespace(counter=1) %}
+              {% for id, task in tasks.items()%}
+                  <div class="task list-group-item">
+                    <div class="d-flex w-100 justify-content-between">
+                      <h5 class="mb-1">Task {{counter.counter}}</h5>
+                      <small class="text-muted">{{task["last_run"]}}</small>
+                    </div>
+                    <p class="mb-1">Zones: {{", ".join(task["zones"])}} | {{task["run_time"]}} min
+                    {% if task["individual"] and task["zones"].__len__() > 1 %}
+                      each
+                    {% endif %}
+                      </p>
+                    <small class="weekdays text-muted">{{", ".join(task["days"])}} | {{task["start_time"].strftime("%I:%M %p")}}</small>
+          
+                    <div class="action-buttons">
+                      <form action="/edit-task" method="post">
+                          <input type="hidden" name="id" value={{id}}>
+                          <button class="edit-button btn btn-secondary btn-sm" type="submit" value="Edit">Edit</button>
+                      </form>
+                        <form action="/api/delete-task" method="post">
+                          <input type="hidden" name="id" value={{id}}>
+                          <button class="edit-button btn btn-danger btn-sm" type="submit" value="Delete">Delete</button>
+                        </form>
+                    </div>
+                  </div>
+                  {% set counter.counter = counter.counter + 1 %}
+              {% endfor %}
+            </div>
+          <a href="/"><button class=" back btn btn-secondary">Back</button></a>
+        </div>
+
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-OERcA2EqjJCMA+/3y+gxIOqMEjwtxJY7qPCqsdltbNJuaOe923+mo//f6V8Qbsw3" crossorigin="anonymous"></script>
+        <script type="text/javascript" src="{{url_for('static', filename='script/view-tasks.js')}}"></script>
+    </body>
+</html>

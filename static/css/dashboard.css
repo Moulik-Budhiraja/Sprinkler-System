@@ -1,0 +1,16 @@
+body {
+    padding: 1rem;
+}
+
+.dashboard-heading, .dashboard-options {
+    display: flex;
+    justify-content: center;
+}
+
+
+
+.dashboard-options {
+    flex-direction: column;
+    align-items: center;
+    margin-top: 2rem;
+}

@@ -1,0 +1,5 @@
+__pycache__
+tasks.json
+Dockerfile
+.prettierignore
+locks.py

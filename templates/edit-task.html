@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-Zenh87qX5JnK2Jl0vWa8Ck2rdkQ2Bzep5IDxbcnCeuOxjzrPF/et3URy9Bv1WTRi" crossorigin="anonymous">
+        <link rel="stylesheet" href="{{ url_for('static', filename='css/edit-task.css')}}">
+        <title>Edit Task</title>
+    </head>
+    <body>
+        <div class="wrapper">
+            <h1>Edit Task</h1>
+            <form action="/api/edit-task" method="post">
+                    <div class="days btn-group" role="group" aria-label="Basic checkbox toggle button group">
+                        {% set days=["Sunday", "Monday", "Tuesday", "Wednesday",
+                        "Thursday", "Friday", "Saturday"] %}
+                        <h5>Days:</h5>
+                        <div>
+                            
+                            {% for i in range(7)%}
+                                <input type="checkbox" class="btn-check" id={{ "day" ~ i }}   name={{ days[i] }} {% if days[i] in task["days"]%}checked{% endif %} autocomplete="off" />
+                                <label class="btn btn-outline-primary" for={{ "day" ~ i }}>{{days[i][0]}}</label>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    <div class="zones btn-group" role="group" aria-label="Basic checkbox toggle button group">
+                        <h5>Zones:</h5>
+                        <div>
+                            {% for i in range(1, 9)%}
+                                <input type="checkbox" class="btn-check" id={{ "zone" ~ i }}  name={{"zone" ~ i}} {% if i in task["zones"] %}checked{% endif %} autocomplete="off" />
+                                <label class="btn btn-outline-primary" for={{ "zone" ~ i }}>{{i}}</label>
+                            {% endfor %}
+                        </div>
+                    </div>
+                <p>
+                    <span>Start Time: </span><input type="time" name="start-time" value={{task["start_time"]}}>
+                </p>
+                <p><span>Run Time: </span> <input type="number" name="end-time" value={{task["run_time"]}}></p>
+                <p><input  type="checkbox" name="individual" {% if task["individual"] %}checked{% endif %}><span class="ind" >Run individually</span></p>
+                <input type="hidden" name="id" value={{task_id}}>
+                <div class="form-action-buttons"><a href="/"><button type="button" class="btn btn-secondary">Back</button></a><button type="submit" class="btn btn-success" value="submit">Save</button>
+                </div>
+            </form>
+        </div>
+
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-OERcA2EqjJCMA+/3y+gxIOqMEjwtxJY7qPCqsdltbNJuaOe923+mo//f6V8Qbsw3" crossorigin="anonymous"></script>
+        <script type="text/javascript" src="{{url_for('static', filename='script/edit-task.js')}}"></script>
+    </body>
+</html>
