@@ -194,7 +194,7 @@ app.delete("/api/tasks/delete", async (req, res) => {
 
   await logHistory(task.zones, "Stopped", "Remote");
 
-  res.json(data);
+  res.json(data2);
 });
 
 let activeZones = [];
