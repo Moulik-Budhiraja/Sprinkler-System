@@ -187,6 +187,8 @@ app.delete("/api/tasks/delete", async (req, res) => {
 
   const data = await response.json();
 
+  await logHistory(req.body.zones, "Stopped", "Remote");
+
   res.json(data);
 });
 
