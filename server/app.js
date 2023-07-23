@@ -178,16 +178,21 @@ app.post("/api/tasks/create", async (req, res) => {
 });
 
 app.delete("/api/tasks/delete", async (req, res) => {
-  const response = await fetch(
-    `http://192.168.50.144/tasks/delete?id=${req.body.id}`,
+  const response1 = await fetch(microcontrollerHost + `/tasks`);
+  const data1 = await response.json();
+
+  const task = data1.tasks.find((t) => t.id === req.body.id);
+
+  const response2 = await fetch(
+    microcontrollerHost + `/tasks/delete?id=${req.body.id}`,
     {
       method: "DELETE",
     }
   );
 
-  const data = await response.json();
+  const data2 = await response2.json();
 
-  await logHistory(req.body.zones, "Stopped", "Remote");
+  await logHistory(task.zones, "Stopped", "Remote");
 
   res.json(data);
 });
