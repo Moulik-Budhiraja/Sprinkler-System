@@ -179,7 +179,7 @@ app.post("/api/tasks/create", async (req, res) => {
 
 app.delete("/api/tasks/delete", async (req, res) => {
   const response1 = await fetch(microcontrollerHost + `/tasks`);
-  const data1 = await response.json();
+  const data1 = await response1.json();
 
   const task = data1.tasks.find((t) => t.id === req.body.id);
 
