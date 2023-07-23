@@ -1,0 +1,19 @@
+version: "3.3"
+
+services:
+  sprinkler-webserver:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sprinkler-webserver:1.0.0
+    ports:
+      - "5000:5000"
+    environment:
+      - MICROCONTROLLER_HOST=${MICROCONTROLLER_HOST}
+      - TZ=${TZ}
+
+    volumes:
+      - ${VOLUME_PATH}:/usr/app/data
+
+    pull_policy: build
+    restart: always

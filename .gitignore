@@ -1,0 +1,4 @@
+.vscode
+ArduinoOutput/
+.env
+node_modules/

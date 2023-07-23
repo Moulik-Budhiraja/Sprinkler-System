@@ -1,0 +1,73 @@
+{
+    "schedules": {
+        "3a9eb469-bdf0-4177-b187-fe6d7444ba57": {
+            "name": "Trees Morning",
+            "days": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6
+            ],
+            "startTime": "07:15",
+            "lastRun": null,
+            "enabled": true,
+            "tasks": [
+                {
+                    "zones": [
+                        5
+                    ],
+                    "runTime": 30
+                }
+            ]
+        },
+        "91de6783-4b00-4032-b890-a4973946f1a1": {
+            "name": "Trees Evening",
+            "days": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6
+            ],
+            "startTime": "19:15",
+            "lastRun": null,
+            "enabled": true,
+            "tasks": []
+        },
+        "b3c78413-9edc-488d-83ac-7731f9a51d79": {
+            "name": "Lawn",
+            "days": [
+                2
+            ],
+            "startTime": "05:30",
+            "lastRun": null,
+            "enabled": false,
+            "tasks": [
+                {
+                    "zones": [
+                        1
+                    ],
+                    "runTime": 20
+                },
+                {
+                    "zones": [
+                        2
+                    ],
+                    "runTime": 20
+                },
+                {
+                    "zones": [
+                        3
+                    ],
+                    "runTime": 20
+                }
+            ]
+        }
+    },
+    "history": []
+}

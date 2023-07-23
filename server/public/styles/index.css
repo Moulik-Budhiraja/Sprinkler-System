@@ -1,0 +1,147 @@
+h1 {
+  font-size: 2.5rem;
+}
+
+p {
+  margin-bottom: 0.2rem;
+}
+
+h2 {
+  font-size: 1.8rem;
+  margin-top: 2rem;
+}
+
+h5 {
+  font-size: 1.4rem;
+}
+
+h6 {
+  font-size: 1.2rem;
+}
+
+.title {
+  text-align: center;
+  margin-bottom: 1rem;
+}
+
+.current-tasks-container {
+  position: relative;
+}
+
+.current-tasks .task {
+  position: relative;
+}
+
+.current-tasks .stop-task {
+  position: absolute;
+  right: 1rem;
+  bottom: 0.5rem;
+}
+
+.current-tasks .timestamp {
+  position: absolute;
+  right: 1rem;
+  top: 0.5rem;
+}
+
+.current-tasks .duration {
+  position: relative;
+  top: -0.6rem;
+  margin-bottom: 1rem;
+}
+
+.create-task {
+  position: absolute;
+  top: 0.2rem;
+  right: 0;
+}
+
+.schedules-container {
+  position: relative;
+}
+
+.schedule {
+  position: relative;
+}
+
+.schedule .last-run {
+  position: absolute;
+  right: 1rem;
+  top: 0.5rem;
+}
+
+.schedule .header {
+  display: flex;
+  align-items: center;
+  position: relative;
+}
+
+.schedule .header .enabled-btn {
+  position: relative;
+  left: 1rem;
+  bottom: 0.5rem;
+
+  text-align: center;
+}
+
+.schedule .action-buttons {
+  position: absolute;
+  right: 1rem;
+  bottom: 0.5rem;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.schedule .tasks {
+  margin-bottom: 0.5rem;
+}
+
+.schedule .task {
+  margin-left: 1rem;
+  margin-bottom: 0;
+}
+
+.create-schedule {
+  position: absolute;
+  top: 0.2rem;
+  right: 0;
+}
+
+.schedule .days {
+  position: relative;
+  top: -0.6rem;
+}
+
+.schedule .start-time {
+  position: relative;
+  top: -1rem;
+}
+
+.history-event .reason {
+  position: relative;
+  top: -0.6rem;
+}
+
+.history-event .timestamp {
+  position: absolute;
+  right: 1rem;
+  top: 0.5rem;
+}
+
+.history-event .zones {
+  position: absolute;
+  right: 1rem;
+  bottom: 0.2rem;
+}
+
+.event.started {
+  color: rgb(10, 105, 10);
+}
+
+.event.stopped {
+  color: rgb(105, 10, 10);
+}
+
+.event.queued {
+  color: rgb(139, 137, 16);
+}

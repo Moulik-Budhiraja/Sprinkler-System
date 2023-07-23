@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sprinkler System</title>
+
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+      integrity="sha384-9ndCyUaIbzAi2FUVXJi0CjmCapSmO7SnpJef0486qhLnuZ2cdeRhO02iuK6FUUVM"
+      crossorigin="anonymous"
+    />
+
+    <link rel="stylesheet" href="/styles/index.css" />
+    <script
+      src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"
+      integrity="sha384-geWF76RCwLtnZ8qwWowPQNguL3RmwHVBC9FhGdlKrxdiJJigb/j/68SIy3Te4Bkz"
+      crossorigin="anonymous"
+      defer
+    ></script>
+
+    <script src="/scripts/index.js" defer></script>
+  </head>
+  <body>
+    <div class="container">
+      <h1 class="title">Sprinkler System</h1>
+
+      <div class="current-tasks-container">
+        <h2>Current Tasks</h2>
+
+        <div class="current-tasks list-group">
+          <p class="text-muted" style="margin-left: 1rem">Loading Tasks...</p>
+        </div>
+
+        <a href="/quick-task"
+          ><button class="btn btn-primary btn-sm create-task">New</button></a
+        >
+      </div>
+
+      <div class="schedules-container">
+        <h2>Schedules</h2>
+
+        <div class="list-group">
+          <p class="text-muted" style="margin-left: 1rem">
+            Leading Schedules...
+          </p>
+        </div>
+
+        <a href="/create-schedule"
+          ><button class="btn btn-primary btn-sm create-schedule">
+            Create
+          </button></a
+        >
+      </div>
+      <div>
+        <h2>History</h2>
+
+        <div class="history list-group">
+          <p class="text-muted" style="margin-left: 1rem">Loading History...</p>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
