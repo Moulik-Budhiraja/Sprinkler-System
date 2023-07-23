@@ -3,6 +3,7 @@ import bodyParser from "body-parser";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs/promises";
+import { existsSync } from "fs";
 import { v4 as uuid4 } from "uuid";
 import { logHistory } from "./helpers.js";
 import { savePath } from "./constants.js";
@@ -16,6 +17,19 @@ const app = express();
 const port = 5000;
 
 const microcontrollerHost = `http://${process.env.MICROCONTROLLER_HOST}`;
+
+if (existsSync(savePath)) {
+  console.log("Data file exists");
+} else {
+  console.log("Data file does not exist, creating...");
+
+  const data = {
+    schedules: {},
+    history: [],
+  };
+
+  fs.writeFile(savePath, JSON.stringify(data), "utf8");
+}
 
 app.use(express.static(path.join(__dirname, "/public")));
 app.use(bodyParser.json());

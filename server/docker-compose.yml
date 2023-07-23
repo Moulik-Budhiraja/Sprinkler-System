@@ -5,7 +5,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: sprinkler-webserver:1.0.0
+    image: sprinkler-webserver:1.0.1
     ports:
       - "5000:5000"
     environment:
