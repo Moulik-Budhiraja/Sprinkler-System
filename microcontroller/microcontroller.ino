@@ -188,7 +188,6 @@ void handleDeleteTask() {
             if (String(task->getId()) == id) {
                 task->stop();
                 taskQueue.remove(i);
-                sendEventDetails(task, "Stopped", "Remote");
 
                 delete task;
 

@@ -301,6 +301,8 @@ app.post("/api/zones", async (req, res) => {
 
     console.log(await logHistory([zone], "Stopped", "Home Assistant"));
   }
+
+  res.json({ success: true });
 });
 
 setInterval(async () => {
