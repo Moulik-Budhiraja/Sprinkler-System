@@ -270,7 +270,7 @@ function refreshHistory() {
   fetch("/api/history")
     .then((response) => response.json())
     .then((data) => {
-      console.log(data);
+      console.log("HISTORY", data);
       const historyContainer = document.querySelector(".history");
       historyContainer.innerHTML = ""; // Clear existing history
 
@@ -326,20 +326,13 @@ function refreshHistory() {
         } else {
           // Show like: Mar 3 HH:MM AM/PM
           timestamp.textContent =
+            date.toLocaleDateString([], {
+              month: "short",
+              day: "numeric",
+            }) +
+            " " +
             date
               .toLocaleDateString([], {
-                month: "short",
-                day: "numeric",
-                hour: "2-digit",
-                minute: "2-digit",
-              })
-              .replace(/\./g, "")
-              .split(",")[0] +
-            "," +
-            date
-              .toLocaleDateString([], {
-                month: "short",
-                day: "numeric",
                 hour: "2-digit",
                 minute: "2-digit",
               })
