@@ -316,11 +316,36 @@ function refreshHistory() {
         } else if (minSinceEvent < 60) {
           timestamp.textContent = `${minSinceEvent} min ago`;
         } else if (minSinceEvent < 60 * 24) {
-          timestamp.textContent = `${Math.floor(minSinceEvent / 60)} hours ago`;
+          timestamp.textContent = date
+            .toLocaleTimeString([], {
+              hour: "2-digit",
+              minute: "2-digit",
+            })
+            .replace(/\./g, "")
+            .toUpperCase();
         } else {
-          timestamp.textContent = `${Math.floor(
-            minSinceEvent / 60 / 24
-          )} days ago`;
+          // Show like: Mar 3 HH:MM AM/PM
+          timestamp.textContent =
+            date
+              .toLocaleDateString([], {
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+              })
+              .replace(/\./g, "")
+              .split(",")[0] +
+            "," +
+            date
+              .toLocaleDateString([], {
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+              })
+              .replace(/\./g, "")
+              .split(",")[1]
+              .toUpperCase();
         }
 
         const zones = document.createElement("p");
