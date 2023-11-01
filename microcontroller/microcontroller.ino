@@ -22,6 +22,7 @@ const String sprinklerWebServer = "REDACTED";
 
 enum WiFiStates { DISCONNECTED, CONNECTING, CONNECTED };
 WiFiStates WiFiState = DISCONNECTED;
+int reconnectAttempts = 0;
 
 Ticker wifiTicker;
 
@@ -54,7 +55,16 @@ void setup() {
     while (WiFi.status() != WL_CONNECTED) {
         delay(500);
         Serial.print(".");
+        reconnectAttempts++;
+
+        if (reconnectAttempts >= 20) {
+            Serial.println("Failed to connect to Wifi!");
+            ESP.restart();
+            break;
+        }
     }
+
+    reconnectAttempts = 0;
 
     Serial.println("Connected to the WiFi network");
     Serial.print("IP address: ");
@@ -253,9 +263,24 @@ void checkWiFi() {
                 Serial.print("IP address: ");
                 Serial.println(WiFi.localIP());
                 WiFiState = CONNECTED;
+                reconnectAttempts = 0;
             } else {
                 Serial.print(".");
+                reconnectAttempts++;
             }
+
+            if (reconnectAttempts >= 20) {
+                Serial.println("Failed to connect to Wifi!");
+                if (taskQueue.size() > 0) {
+                    Serial.println("Retrying...");
+                    WiFi.disconnect(true, false);
+                    WiFiState = DISCONNECTED;
+                } else {
+                    Serial.println("No tasks running, Restarting...");
+                    ESP.restart();
+                }
+            }
+
             break;
         case CONNECTED:
             if (WiFi.status() != WL_CONNECTED) {
