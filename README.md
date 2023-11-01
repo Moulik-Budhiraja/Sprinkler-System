@@ -33,7 +33,7 @@ This irrigation controller allows you to remotely control, schedule, and monitor
 git clone https://github.com/Moulik-Budhiraja/Sprinkler-System
 
 # Change directory
-cd Sprinkler-System
+cd Sprinkler-System/server
 
 # Deploy the stack
 docker-compose up -d
