@@ -49,8 +49,8 @@ docker-compose up -d
 ## Screenshots
 
 <p float="left">
-  <img src="/Assets/Images/esp32.png" alt="ESP32" width="100" />
-  <img src="/Assets/Images/web-interface.png" alt="Web Interface" width="100" />
+  <img src="/Assets/Images/esp32.png" alt="ESP32" width="600" />
+  <img src="/Assets/Images/web-interface.png" alt="Web Interface" width="200" />
 </p>
 
 ## Authors
