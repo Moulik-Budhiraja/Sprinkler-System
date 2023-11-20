@@ -1,5 +1,7 @@
 # Smart Irrigation Controller
 
+![Sprinklers](/Assets/Images/lawn.jpg)
+
 ## Introduction
 
 This irrigation controller allows you to remotely control, schedule, and monitor your irrigation system. It is designed to be used with a ESP32 and a 8 channel relay board. If you want to use the web interface, you will also need a device to host its docker image.
