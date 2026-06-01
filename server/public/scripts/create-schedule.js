@@ -1,121 +1,159 @@
+const ZONE_COUNT = 8;
+const DAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
+
+function buildZoneGrid(containerId) {
+  const grid = document.getElementById(containerId);
+  for (let i = 1; i <= ZONE_COUNT; i++) {
+    const tile = document.createElement("div");
+    tile.className = "tile";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.id = `zone${i}`;
+    const label = document.createElement("label");
+    label.setAttribute("for", `zone${i}`);
+    label.textContent = i;
+    tile.append(input, label);
+    grid.appendChild(tile);
+  }
+}
+
+function buildDayGrid(containerId) {
+  const grid = document.getElementById(containerId);
+  DAY_LABELS.forEach((label, i) => {
+    const tile = document.createElement("div");
+    tile.className = "tile tile--day";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.id = `day${i}`;
+    const lbl = document.createElement("label");
+    lbl.setAttribute("for", `day${i}`);
+    lbl.textContent = label;
+    tile.append(input, lbl);
+    grid.appendChild(tile);
+  });
+}
+
 const tasks = {};
 
-/* <div class="tasks list-group">
-<div class="task list-group-item">
-  <p>Zone(s): 1, 2, 5 | 4 min</p>
-  <button class="btn btn-sm btn-danger">Remove</button>
-</div>
-</div> */
+function renderTasks() {
+  const container = document.getElementById("taskList");
+  container.innerHTML = "";
 
-const renderTasks = () => {
-  const tasksContainer = document.querySelector(".tasks");
-  tasksContainer.innerHTML = "";
-
-  if (Object.keys(tasks).length === 0) {
-    const noTasks = document.createElement("p");
-    noTasks.textContent = "No tasks added yet.";
-    noTasks.classList.add("text-muted");
-    noTasks.style.marginLeft = "1rem";
-    tasksContainer.appendChild(noTasks);
+  const entries = Object.entries(tasks);
+  if (entries.length === 0) {
+    container.appendChild(emptyRow("No tasks yet — add one below."));
+    return;
   }
 
-  for (const [id, task] of Object.entries(tasks)) {
-    const taskElement = document.createElement("div");
-    taskElement.classList.add("task", "list-group-item");
+  entries.forEach(([id, task], index) => {
+    const row = document.createElement("div");
+    row.className = "builder-task";
 
-    const zones = task.zones.join(", ");
-    const zoneP = document.createElement("p");
-    zoneP.textContent = `Zone(s): ${zones} | ${task.runTime} min`;
+    const order = document.createElement("div");
+    order.className = "builder-task__order";
+    order.textContent = index + 1;
 
-    const removeBtn = document.createElement("button");
-    removeBtn.classList.add("btn", "btn-sm", "btn-danger");
-    removeBtn.textContent = "Remove";
+    const info = document.createElement("div");
+    info.className = "builder-task__info";
+    task.zones.forEach((z) => {
+      const chip = document.createElement("span");
+      chip.className = "chip grass";
+      chip.textContent = `Zone ${z}`;
+      info.appendChild(chip);
+    });
+    const dur = document.createElement("span");
+    dur.className = "chip";
+    dur.textContent = `${task.runTime} min`;
+    info.appendChild(dur);
 
-    removeBtn.addEventListener("click", () => {
+    const remove = document.createElement("button");
+    remove.className = "btn btn--danger btn--sm";
+    remove.textContent = "Remove";
+    remove.addEventListener("click", () => {
       delete tasks[id];
       renderTasks();
     });
 
-    taskElement.appendChild(zoneP);
-
-    taskElement.appendChild(removeBtn);
-
-    tasksContainer.appendChild(taskElement);
-
-    console.log(id, task);
-  }
-};
-
-document.querySelector(".add-task-btn").addEventListener("click", () => {
-  let duration = document.querySelector(".task-duration").valueAsNumber;
-
-  if (!duration) {
-    duration = 15;
-  }
-
-  const zones = [];
-
-  for (let i = 1; i <= 8; i++) {
-    const zone = document.querySelector(`#zone${i}`).checked;
-
-    if (zone) {
-      zones.push(i);
-    }
-  }
-
-  const task = {
-    zones: zones,
-    runTime: duration,
-  };
-
-  tasks[Math.random()] = task;
-
-  console.log(tasks);
-
-  renderTasks();
-});
-
-document.querySelector(".save-btn").addEventListener("click", async () => {
-  const name = document.querySelector(".schedule-name").value;
-  const days = [];
-
-  for (let i = 0; i <= 6; i++) {
-    const day = document.querySelector(`#day${i}`).checked;
-
-    if (day) {
-      days.push(i);
-    }
-  }
-
-  const startTime = document.querySelector(".start-time").value;
-
-  const parsedTasks = [];
-
-  for (const [id, task] of Object.entries(tasks)) {
-    parsedTasks.push({
-      zones: task.zones,
-      runTime: task.runTime,
-    });
-  }
-
-  const response = await fetch("/api/schedules/create", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      name,
-      days,
-      startTime,
-      tasks: parsedTasks,
-    }),
+    row.append(order, info, remove);
+    container.appendChild(row);
   });
+}
 
-  const data = await response.json();
+function emptyRow(text) {
+  const div = document.createElement("div");
+  div.className = "empty";
+  div.textContent = text;
+  return div;
+}
 
-  console.log(data);
+function setupAddTask() {
+  document.getElementById("addTaskBtn").addEventListener("click", () => {
+    const zones = [];
+    for (let i = 1; i <= ZONE_COUNT; i++) {
+      if (document.querySelector(`#zone${i}`).checked) zones.push(i);
+    }
+    if (zones.length === 0) return;
 
-  window.location.href = "/";
+    const duration = document.querySelector(".task-duration").valueAsNumber || 15;
+    tasks[Date.now() + Math.random()] = { zones, runTime: duration };
+
+    for (let i = 1; i <= ZONE_COUNT; i++) {
+      document.querySelector(`#zone${i}`).checked = false;
+    }
+    renderTasks();
+  });
+}
+
+function collectSchedule() {
+  const name = document.querySelector(".schedule-name").value.trim();
+  const days = [];
+  for (let i = 0; i <= 6; i++) {
+    if (document.querySelector(`#day${i}`).checked) days.push(i);
+  }
+  const startTime = document.querySelector(".start-time").value;
+  const parsedTasks = Object.values(tasks).map((t) => ({
+    zones: t.zones,
+    runTime: t.runTime,
+  }));
+  return { name, days, startTime, tasks: parsedTasks };
+}
+
+buildZoneGrid("zoneGrid");
+buildDayGrid("dayGrid");
+setupAddTask();
+renderTasks();
+
+document.getElementById("saveBtn").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const payload = collectSchedule();
+
+  if (!payload.name) {
+    flash(btn, "Add a name first");
+    return;
+  }
+  if (payload.tasks.length === 0) {
+    flash(btn, "Add at least one task");
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "Saving…";
+  try {
+    await fetch("/api/schedules/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    window.location.href = "/";
+  } catch (err) {
+    console.error(err);
+    btn.disabled = false;
+    btn.textContent = "Something went wrong — retry";
+  }
 });
 
-renderTasks();
+function flash(btn, message) {
+  const original = btn.textContent;
+  btn.textContent = message;
+  setTimeout(() => (btn.textContent = original), 1600);
+}

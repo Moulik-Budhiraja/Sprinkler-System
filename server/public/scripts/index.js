@@ -1,365 +1,322 @@
-function refreshTasks() {
-  fetch("/api/tasks")
-    .then((response) => response.json())
-    .then((data) => {
-      console.log(data);
-      const tasksContainer = document.querySelector(".current-tasks");
-      tasksContainer.innerHTML = ""; // Clear existing tasks
+const ZONE_COUNT = 8;
+const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-      if (data.tasks.length === 0) {
-        const noTasks = document.createElement("p");
-        noTasks.className = "text-muted";
-        noTasks.textContent = "No tasks running";
-        noTasks.style.marginLeft = "1rem";
-        tasksContainer.appendChild(noTasks);
-      }
-
-      data.tasks.forEach((task) => {
-        const taskDiv = document.createElement("div");
-        taskDiv.className = "task list-group-item";
-
-        const zones = document.createElement("h6");
-        zones.className = "zones";
-        zones.textContent = `Zone(s): ${task.zones.join(", ")}`;
-
-        const duration = document.createElement("p");
-        duration.className = "duration text-muted";
-        duration.textContent = `${task.runTime} min`;
-
-        const timestamp = document.createElement("p");
-        timestamp.className = "timestamp text-muted";
-
-        // Parse startTime from unix seconds to human readable
-        const date = new Date(task.startTime * 1000);
-        const minSinceStart = Math.floor(
-          (Date.now() - task.startTime * 1000) / 1000 / 60
-        );
-
-        timestamp.textContent = `Started ${minSinceStart} min ago`;
-
-        if (task.startTime === 0) {
-          timestamp.textContent = "Queued";
-        }
-
-        const button = document.createElement("button");
-        button.className = "stop-task btn btn-danger btn-sm";
-        button.type = "submit";
-        button.value = "Stop";
-        button.textContent = "Stop";
-
-        button.addEventListener("click", (e) => {
-          e.preventDefault();
-
-          fetch(`/api/tasks/delete`, {
-            method: "DELETE",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ id: task.id }),
-          })
-            .then((response) => response.json())
-            .then((data) => {
-              console.log(data);
-              refreshTasks();
-              refreshHistory();
-            });
-        });
-
-        taskDiv.append(zones, duration, timestamp, button);
-        tasksContainer.appendChild(taskDiv);
-      });
-    })
-    .catch((err) => console.error(err));
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
 }
 
-function refreshSchedules() {
-  fetch("/api/schedules")
-    .then((response) => response.json())
+function fmtTime(hhmm) {
+  const [h, m] = hhmm.split(":").map((n) => parseInt(n, 10));
+  const ampm = h >= 12 ? "PM" : "AM";
+  const hr = h % 12 === 0 ? 12 : h % 12;
+  return `${hr}:${m.toString().padStart(2, "0")} ${ampm}`;
+}
+
+function relativeFrom(unixSeconds) {
+  if (unixSeconds === null || unixSeconds === undefined) return "Never";
+  const min = Math.floor((Date.now() - unixSeconds * 1000) / 60000);
+  if (min < 1) return "Just now";
+  if (min < 60) return `${min}m ago`;
+  const hrs = Math.floor(min / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+/* ---------------------------------------------------------------- tasks + zones */
+
+let lastTasks = [];
+
+function renderZonemap(tasks) {
+  const active = new Set();
+  const queued = new Set();
+  tasks.forEach((t) => {
+    const running = t.startTime && t.startTime !== 0;
+    t.zones.forEach((z) => (running ? active : queued).add(z));
+  });
+
+  const map = document.getElementById("zonemap");
+  map.innerHTML = "";
+
+  for (let z = 1; z <= ZONE_COUNT; z++) {
+    const isActive = active.has(z);
+    const isQueued = !isActive && queued.has(z);
+    const zone = el("div", "zone" + (isActive ? " active" : isQueued ? " queued" : ""));
+    zone.appendChild(el("div", "zone__water"));
+    zone.appendChild(el("div", "zone__num", z));
+    zone.appendChild(
+      el("div", "zone__state", isActive ? "Watering" : isQueued ? "Queued" : "Idle")
+    );
+    map.appendChild(zone);
+  }
+
+  document.getElementById("zoneCount").textContent = active.size
+    ? `${active.size} active`
+    : "all idle";
+
+  const zoneDot = document.getElementById("zoneDot");
+  const zoneValue = document.getElementById("zoneValue");
+  if (active.size) {
+    zoneDot.classList.remove("idle");
+    zoneValue.textContent = `Zone ${[...active].sort((a, b) => a - b).join(", ")}`;
+  } else {
+    zoneDot.classList.add("idle");
+    zoneValue.textContent = "Nothing running";
+  }
+}
+
+function renderTasks(tasks) {
+  const container = document.getElementById("tasks");
+  container.innerHTML = "";
+  document.getElementById("taskCount").textContent = `${tasks.length} active`;
+
+  if (tasks.length === 0) {
+    container.appendChild(
+      el("div", "empty", "No tasks running. The garden is resting.")
+    );
+    return;
+  }
+
+  tasks.forEach((task) => {
+    const running = task.startTime && task.startTime !== 0;
+    const card = el("div", "task-card" + (running ? "" : " queued"));
+
+    // progress ring
+    const ringWrap = el("div", "task-card__ring");
+    const ring = el("div", "ring" + (running ? "" : " queued"));
+    let pct = 0;
+    let elapsed = 0;
+    if (running) {
+      elapsed = Math.floor((Date.now() / 1000 - task.startTime) / 60);
+      pct = Math.max(0, Math.min(100, (elapsed / task.runTime) * 100));
+      ring.style.setProperty("--val", pct);
+      ring.appendChild(el("span", "ring__label", `${Math.max(0, task.runTime - elapsed)}m`));
+    } else {
+      ring.appendChild(el("span", "ring__label", "—"));
+    }
+    ringWrap.appendChild(ring);
+
+    const body = el("div", "task-card__body");
+    const zonesRow = el("div", "task-card__zones");
+    task.zones.forEach((z) => zonesRow.appendChild(el("span", "chip", `Zone ${z}`)));
+    body.appendChild(zonesRow);
+
+    const meta = el("div", "task-card__meta");
+    if (running) {
+      meta.innerHTML = `<b>${elapsed} min</b> of ${task.runTime} min elapsed`;
+    } else {
+      meta.innerHTML = `Queued · <b>${task.runTime} min</b> when it runs`;
+    }
+    body.appendChild(meta);
+
+    const stop = el("button", "btn btn--danger btn--sm");
+    stop.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg> Stop';
+    stop.addEventListener("click", () => {
+      stop.disabled = true;
+      fetch("/api/tasks/delete", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: task.id }),
+      })
+        .then((r) => r.json())
+        .then(() => {
+          refreshTasks();
+          refreshHistory();
+        })
+        .catch(() => (stop.disabled = false));
+    });
+
+    card.append(ringWrap, body, stop);
+    container.appendChild(card);
+  });
+}
+
+function refreshTasks() {
+  fetch("/api/tasks")
+    .then((r) => r.json())
     .then((data) => {
-      console.log(data);
-      const schedulesContainer = document.querySelector(
-        ".schedules-container .list-group"
+      lastTasks = data.tasks || [];
+      const sysDot = document.getElementById("sysDot");
+      const sysValue = document.getElementById("sysValue");
+      sysDot.classList.remove("idle");
+      sysValue.textContent = "Online";
+      renderZonemap(lastTasks);
+      renderTasks(lastTasks);
+    })
+    .catch((err) => {
+      console.error(err);
+      const sysDot = document.getElementById("sysDot");
+      const sysValue = document.getElementById("sysValue");
+      sysDot.classList.add("idle");
+      sysValue.textContent = "Offline";
+      renderZonemap([]);
+      const container = document.getElementById("tasks");
+      container.innerHTML = "";
+      container.appendChild(
+        el("div", "empty", "Can't reach the controller right now.")
       );
-      schedulesContainer.innerHTML = ""; // Clear existing schedules
-
-      if (Object.values(data).length === 0) {
-        const noSchedules = document.createElement("p");
-        noSchedules.className = "text-muted";
-        noSchedules.textContent = "No Schedules";
-        noSchedules.style.marginLeft = "1rem";
-        schedulesContainer.appendChild(noSchedules);
-      }
-
-      for (const scheduleId in data) {
-        const schedule = data[scheduleId];
-
-        const scheduleDiv = document.createElement("div");
-        scheduleDiv.className = "schedule list-group-item";
-
-        const header = document.createElement("div");
-        header.className = "header";
-
-        const headerText = document.createElement("div");
-        headerText.className = "header-text";
-
-        const scheduleName = document.createElement("h5");
-        scheduleName.textContent = schedule.name;
-
-        const scheduleDays = document.createElement("p");
-        scheduleDays.className = "days text-muted";
-
-        // Parse days from ints to human readable
-        const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-        const newDays = schedule.days.map((day) => days[day]);
-
-        scheduleDays.textContent = newDays.join(", ");
-
-        const startTime = document.createElement("p");
-        startTime.className = "start-time text-muted";
-
-        // Parse startTime from HH:MM 24h string to human readable am/pm
-        const time = schedule.startTime.split(":");
-        let hours = parseInt(time[0]);
-        const minutes = parseInt(time[1]);
-
-        let ampm = "AM";
-        if (hours > 12) {
-          hours -= 12;
-          ampm = "PM";
-        }
-
-        const hoursStr = hours.toString();
-        const minutesStr = minutes.toString().padStart(2, "0");
-
-        startTime.textContent = `${hoursStr}:${minutesStr} ${ampm}`;
-
-        headerText.append(scheduleName, scheduleDays, startTime);
-        header.appendChild(headerText);
-
-        const tasksContainer = document.createElement("div");
-        tasksContainer.className = "tasks";
-
-        const tasksHeader = document.createElement("p");
-        tasksHeader.textContent = "Tasks:";
-        tasksContainer.appendChild(tasksHeader);
-
-        schedule.tasks.forEach((task) => {
-          const taskP = document.createElement("p");
-          taskP.className = "task text-muted";
-          taskP.textContent = `Zone(s): ${task.zones.join(", ")} | ${
-            task.runTime
-          } min`;
-          tasksContainer.appendChild(taskP);
-        });
-
-        const lastRun = document.createElement("div");
-        lastRun.className = "last-run text-muted";
-
-        // Parse lastRun from unix seconds to human readable
-        // If lastRun is 0, then the schedule has never run
-        // If lastRun is less than 60 min then display in minutes
-        // If lastRun is less than 24 hours then display in hours
-        // If lastRun is more than 24 hours then display in days
-
-        const lastRunDate = new Date(schedule.lastRun * 1000);
-        const lastRunMin = Math.floor(
-          (Date.now() - schedule.lastRun * 1000) / 1000 / 60
-        );
-        const lastRunHours = Math.floor(lastRunMin / 60);
-
-        if (schedule.lastRun === null) {
-          lastRun.textContent = "Never";
-        } else if (lastRunMin < 1) {
-          lastRun.textContent = "Just now";
-        } else if (lastRunMin < 60) {
-          lastRun.textContent = `${lastRunMin} min`;
-        } else if (lastRunHours < 24) {
-          lastRun.textContent = `${lastRunHours} hours`;
-        } else {
-          lastRun.textContent = `${Math.floor(lastRunHours / 24)} days`;
-        }
-
-        const actionButtons = document.createElement("div");
-        actionButtons.className = "action-buttons";
-
-        const enabledButton = document.createElement("button");
-        enabledButton.className = "enabled-button btn btn-sm";
-        enabledButton.type = "submit";
-
-        if (schedule.enabled) {
-          enabledButton.value = "Enabled";
-          enabledButton.textContent = "Enabled";
-          enabledButton.classList.add("btn-success");
-        } else {
-          enabledButton.value = "Disabled";
-          enabledButton.textContent = "Disabled";
-          enabledButton.classList.add("btn-secondary");
-        }
-
-        enabledButton.addEventListener("click", (e) => {
-          e.preventDefault();
-
-          fetch(`/api/schedules/update`, {
-            method: "PUT",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              ...schedule,
-              id: scheduleId,
-              enabled: !schedule.enabled,
-            }),
-          })
-            .then((response) => response.json())
-            .then((data) => {
-              console.log(data);
-              refreshSchedules();
-            });
-        });
-
-        const editButton = document.createElement("button");
-        editButton.className = "edit-button btn btn-secondary btn-sm";
-        editButton.type = "submit";
-        editButton.value = "Edit";
-        editButton.textContent = "Edit";
-
-        editButton.addEventListener("click", (e) => {
-          e.preventDefault();
-
-          //Redirect to edit page
-          window.location.href = `/edit-schedule?id=${scheduleId}`;
-        });
-
-        const deleteButton = document.createElement("button");
-        deleteButton.className = "edit-button btn btn-danger btn-sm";
-        deleteButton.type = "submit";
-        deleteButton.value = "Delete";
-        deleteButton.textContent = "Delete";
-
-        deleteButton.addEventListener("click", (e) => {
-          e.preventDefault();
-
-          fetch(`/api/schedules/delete`, {
-            method: "DELETE",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ id: scheduleId }),
-          })
-            .then((response) => response.json())
-            .then((data) => {
-              console.log(data);
-              refreshSchedules();
-            });
-        });
-
-        actionButtons.append(editButton, deleteButton);
-        scheduleDiv.append(
-          header,
-          lastRun,
-          tasksContainer,
-          enabledButton,
-          actionButtons
-        );
-        schedulesContainer.appendChild(scheduleDiv);
-      }
     });
 }
 
-function refreshHistory() {
-  fetch("/api/history")
-    .then((response) => response.json())
-    .then((data) => {
-      console.log("HISTORY", data);
-      const historyContainer = document.querySelector(".history");
-      historyContainer.innerHTML = ""; // Clear existing history
+/* ---------------------------------------------------------------- schedules */
 
-      if (data.length === 0) {
-        const noHistory = document.createElement("p");
-        noHistory.className = "text-muted";
-        noHistory.textContent = "No history";
-        noHistory.style.marginLeft = "1rem";
-        historyContainer.appendChild(noHistory);
+function refreshSchedules() {
+  fetch("/api/schedules")
+    .then((r) => r.json())
+    .then((data) => {
+      const container = document.getElementById("schedules");
+      container.innerHTML = "";
+      const ids = Object.keys(data);
+
+      document.getElementById("schedCount").textContent = `${ids.length} total`;
+      const enabledCount = ids.filter((id) => data[id].enabled).length;
+      document.getElementById("schedValue").textContent = `${enabledCount} active`;
+
+      if (ids.length === 0) {
+        container.appendChild(
+          el("div", "empty", "No schedules yet. Create one to automate watering.")
+        );
+        return;
       }
 
-      data.forEach((event) => {
-        const historyEventDiv = document.createElement("div");
-        historyEventDiv.className = "history-event list-group-item";
+      ids.forEach((id) => {
+        const s = data[id];
+        const card = el("div", "sched" + (s.enabled ? "" : " disabled"));
 
-        const eventType = document.createElement("h6");
-        eventType.className = `event ${event.event.toLowerCase()}`;
-        eventType.textContent = event.event;
+        const top = el("div", "sched__top");
+        const titleWrap = el("div");
+        titleWrap.appendChild(el("div", "sched__name", s.name || "Untitled"));
+        titleWrap.appendChild(el("div", "sched__time", fmtTime(s.startTime)));
+        top.appendChild(titleWrap);
+        top.appendChild(el("div", "sched__lastrun", `Last run · ${relativeFrom(s.lastRun)}`));
+        card.appendChild(top);
 
-        const reason = document.createElement("p");
-        reason.className = "reason text-muted";
-        reason.textContent = event.reason;
+        const daysRow = el("div", "days-row");
+        ["S", "M", "T", "W", "T", "F", "S"].forEach((label, i) => {
+          const dot = el("div", "day-dot" + (s.days.includes(i) ? " on" : ""), label);
+          daysRow.appendChild(dot);
+        });
+        card.appendChild(daysRow);
 
-        const timestamp = document.createElement("p");
-        timestamp.className = "timestamp text-muted";
+        const tasksWrap = el("div", "sched__tasks");
+        s.tasks.forEach((t) => {
+          const row = el("div", "sched__task");
+          const chips = el("div");
+          chips.style.display = "flex";
+          chips.style.gap = "5px";
+          chips.style.flexWrap = "wrap";
+          t.zones.forEach((z) => chips.appendChild(el("span", "chip grass", `Z${z}`)));
+          row.appendChild(chips);
+          row.appendChild(el("span", "dur", `${t.runTime} min`));
+          tasksWrap.appendChild(row);
+        });
+        card.appendChild(tasksWrap);
 
-        // Parse startTime from unix seconds to human readable
-        const date = new Date(event.timestamp * 1000);
-        const minSinceEvent = Math.floor(
-          (Date.now() - event.timestamp * 1000) / 1000 / 60
-        );
+        const foot = el("div", "sched__foot");
 
-        // If event is less than 60 min then display in minutes
-        // If event is less than 24 hours then display in hours
-        // If event is more than 24 hours then display in days
-        if (minSinceEvent < 0) {
-          eventType.classList.add("queued");
-          eventType.textContent = "Queued";
-        }
+        const toggle = el("div", "toggle" + (s.enabled ? " on" : ""));
+        toggle.appendChild(el("span", "toggle__track"));
+        toggle.appendChild(el("span", "toggle__label", s.enabled ? "Enabled" : "Disabled"));
+        toggle.addEventListener("click", () => {
+          fetch("/api/schedules/update", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...s, id, enabled: !s.enabled }),
+          })
+            .then((r) => r.json())
+            .then(() => refreshSchedules());
+        });
+        foot.appendChild(toggle);
 
-        if (minSinceEvent < 1) {
-          timestamp.textContent = "Just now";
-        } else if (minSinceEvent < 60) {
-          timestamp.textContent = `${minSinceEvent} min ago`;
-        } else if (minSinceEvent < 60 * 24) {
-          timestamp.textContent = date
-            .toLocaleTimeString([], {
-              hour: "2-digit",
-              minute: "2-digit",
-            })
-            .replace(/\./g, "")
-            .toUpperCase();
-        } else {
-          // Show like: Mar 3 HH:MM AM/PM
-          timestamp.textContent =
-            date.toLocaleDateString([], {
-              month: "short",
-              day: "numeric",
-            }) +
-            " " +
-            date
-              .toLocaleDateString([], {
-                hour: "2-digit",
-                minute: "2-digit",
-              })
-              .replace(/\./g, "")
-              .split(",")[1]
-              .toUpperCase();
-        }
+        const edit = el("button", "btn btn--ghost btn--sm", "Edit");
+        edit.addEventListener("click", () => {
+          window.location.href = `/edit-schedule?id=${id}`;
+        });
 
-        const zones = document.createElement("p");
-        zones.className = "zones";
-        zones.textContent = `Zone(s): ${event.zones.join(", ")}`;
+        const del = el("button", "btn btn--danger btn--sm", "Delete");
+        del.addEventListener("click", () => {
+          fetch("/api/schedules/delete", {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id }),
+          })
+            .then((r) => r.json())
+            .then(() => refreshSchedules());
+        });
 
-        historyEventDiv.append(eventType, reason, timestamp, zones);
-        historyContainer.appendChild(historyEventDiv);
+        foot.append(edit, del);
+        card.appendChild(foot);
+        container.appendChild(card);
       });
     })
     .catch((err) => console.error(err));
 }
 
-window.onload = () => {
-  refreshTasks();
-  refreshSchedules();
-  refreshHistory();
-};
+/* ---------------------------------------------------------------- history */
 
-setInterval(() => {
+function refreshHistory() {
+  fetch("/api/history")
+    .then((r) => r.json())
+    .then((data) => {
+      const container = document.getElementById("history");
+      container.innerHTML = "";
+
+      if (!data.length) {
+        const empty = el("div", "empty", "No history yet.");
+        empty.style.border = "none";
+        empty.style.background = "none";
+        container.appendChild(empty);
+        return;
+      }
+
+      data.forEach((event) => {
+        const minSince = Math.floor((Date.now() - event.timestamp * 1000) / 60000);
+        let type = event.event.toLowerCase();
+        let typeLabel = event.event;
+        if (minSince < 0) {
+          type = "queued";
+          typeLabel = "Queued";
+        }
+
+        const date = new Date(event.timestamp * 1000);
+        let when;
+        if (minSince < 0) {
+          when = "Upcoming";
+        } else if (minSince < 1) {
+          when = "Just now";
+        } else if (minSince < 60) {
+          when = `${minSince}m ago`;
+        } else if (minSince < 60 * 24) {
+          when = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+        } else {
+          when =
+            date.toLocaleDateString([], { month: "short", day: "numeric" }) +
+            " · " +
+            date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+        }
+
+        const item = el("div", `hevent ${type}`);
+        const main = el("div", "hevent__main");
+        main.appendChild(el("div", "hevent__type", `${typeLabel} · Zone ${event.zones.join(", ")}`));
+        main.appendChild(el("div", "hevent__sub", event.reason));
+        item.appendChild(main);
+        item.appendChild(el("div", "hevent__time", when));
+        container.appendChild(item);
+      });
+    })
+    .catch((err) => console.error(err));
+}
+
+/* ---------------------------------------------------------------- boot */
+
+function refreshAll() {
   refreshTasks();
   refreshSchedules();
   refreshHistory();
-}, 10000); // Refresh tasks and history every 15 seconds
+}
+
+window.addEventListener("load", refreshAll);
+setInterval(refreshAll, 10000);
