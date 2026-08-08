@@ -214,6 +214,78 @@ test("renewed live owner is not stolen after scaled work exceeds stale threshold
   assert.deepEqual(Object.keys((await second.read()).schedules).sort(), ["competing", "slow"]);
 });
 
+test("same-process repositories admit writes FIFO before starting each cross-process lock deadline", async () => {
+  const dataPath = await tempPath();
+  const first = await new JsonRepository(dataPath, { lockTimeoutMs: 25 }).init();
+  const second = await new JsonRepository(dataPath, { lockTimeoutMs: 25 }).init();
+  const order = [];
+  let releaseFirst;
+  const firstBlocked = new Promise((resolve) => { releaseFirst = resolve; });
+  let firstAdmitted;
+  const admitted = new Promise((resolve) => { firstAdmitted = resolve; });
+
+  const slow = first.mutate(async (data) => {
+    order.push("first-start");
+    firstAdmitted();
+    await firstBlocked;
+    data.schedules.first = { name: "first" };
+    order.push("first-end");
+  });
+  await admitted;
+  const queued = second.mutate((data) => {
+    order.push("second");
+    data.schedules.second = { name: "second" };
+  });
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  releaseFirst();
+  await Promise.all([slow, queued]);
+
+  assert.deepEqual(order, ["first-start", "first-end", "second"]);
+  assert.deepEqual(Object.keys((await first.read()).schedules).sort(), ["first", "second"]);
+});
+
+test("a failed admitted writer does not poison the same-process repository queue", async () => {
+  const dataPath = await tempPath();
+  let injectFailure = false;
+  const failing = await new JsonRepository(dataPath, {
+    onDurabilityBoundary: async (boundary) => {
+      if (injectFailure && boundary === "primary-directory-synced") {
+        injectFailure = false;
+        throw new Error("injected queued writer failure");
+      }
+    },
+  }).init();
+  const following = await new JsonRepository(dataPath).init();
+  injectFailure = true;
+
+  const failed = failing.mutate((data) => { data.schedules.failed = { name: "failed" }; });
+  const succeeded = following.mutate((data) => { data.schedules.succeeded = { name: "succeeded" }; });
+  await assert.rejects(failed, /injected queued writer failure/);
+  await succeeded;
+
+  const restarted = await new JsonRepository(dataPath).init();
+  assert.ok((await restarted.read()).schedules.succeeded);
+});
+
+test("same-process admission overload is bounded and returns an explicit retryable error", async () => {
+  const dataPath = await tempPath();
+  const first = await new JsonRepository(dataPath, { maxPendingWrites: 2 }).init();
+  const second = await new JsonRepository(dataPath, { maxPendingWrites: 2 }).init();
+  const third = await new JsonRepository(dataPath, { maxPendingWrites: 2 }).init();
+  let release;
+  const blocked = new Promise((resolve) => { release = resolve; });
+  let admitted;
+  const started = new Promise((resolve) => { admitted = resolve; });
+  const active = first.mutate(async () => { admitted(); await blocked; });
+  await started;
+  const queued = second.mutate((data) => { data.schedules.queued = { name: "queued" }; });
+  await assert.rejects(third.mutate(() => {}), (error) =>
+    error.code === "REPOSITORY_OVERLOADED" && error.status === 503
+  );
+  release();
+  await Promise.all([active, queued]);
+});
+
 test("expired crashed owner is recovered and a PID-reuse identity mismatch is not treated as the owner", async () => {
   for (const owner of [
     { token: "crashed-owner", pid: 99999999, processStart: "dead", heartbeatAt: 0 },

@@ -135,6 +135,20 @@ test("editor schedule deletion lost response reports unknown and disables blind 
   await expect(remove).toBeDisabled();
 });
 
+test("editor reports a durable idempotency conflict truthfully and permits corrective action", async ({ page }) => {
+  await page.route("**/api/schedules/delete", (route) => route.fulfill({
+    status: 409,
+    contentType: "application/json",
+    body: JSON.stringify({ error: "requestId was already used for another operation" }),
+  }));
+  page.on("dialog", (dialog) => dialog.accept());
+  await page.goto("/edit-schedule?id=schedule-2");
+  const remove = page.getByRole("button", { name: "Delete schedule" });
+  await remove.click();
+  await expect(page.locator("#formFeedback")).toHaveText("Delete failed · requestId was already used for another operation");
+  await expect(remove).toBeEnabled();
+});
+
 test("schedule create locks semantic input after a committed lost response and reconciles durable success", async ({ page }) => {
   let releaseStatus;
   const statusGate = new Promise((resolve) => { releaseStatus = resolve; });

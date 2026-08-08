@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import http from "node:http";
 import test from "node:test";
 import request from "supertest";
@@ -282,24 +283,135 @@ test("mutation schemas reject invalid types, bounds, duplicates, inherited ids a
   assert.equal(controller.state.adds, 0);
 });
 
-test("serialized atomic repository preserves 48 concurrent acknowledged writes and restart state", async () => {
-  const dataPath = await tempDataPath();
-  const controller = successfulController();
-  const one = await createApp({ dataPath, controllerFetch: controller.fetch });
-  const creates = await withBoundServer(one.app, (client) => Promise.all(Array.from({ length: 48 }, (_, i) =>
-    client.post("/api/schedules/create").send(scheduleCreate(i)).expect(201)
-  )));
-  assert.equal(new Set(creates.map((response) => response.body.id)).size, 48);
+test("serialized atomic repository preserves 48 and 96 concurrent acknowledged writes and restart state", async () => {
+  for (const count of [48, 96]) {
+    const dataPath = await tempDataPath();
+    const controller = successfulController();
+    const one = await createApp({ dataPath, controllerFetch: controller.fetch });
+    const creates = await withBoundServer(one.app, (client) => Promise.all(Array.from({ length: count }, (_, i) =>
+      client.post("/api/schedules/create").send(scheduleCreate(i)).expect(201)
+    )));
+    assert.equal(new Set(creates.map((response) => response.body.id)).size, count);
 
-  const two = await createApp({ dataPath, controllerFetch: controller.fetch });
-  await withBoundServer(two.app, async (client) => {
-    const schedules = await client.get("/api/schedules").expect(200);
-    assert.equal(Object.keys(schedules.body).length, 48);
-    assert.deepEqual(Object.values(schedules.body).map((s) => s.name).sort(),
-      Array.from({ length: 48 }, (_, i) => `Schedule ${i}`).sort());
+    const two = await createApp({ dataPath, controllerFetch: controller.fetch });
+    await withBoundServer(two.app, async (client) => {
+      const schedules = await client.get("/api/schedules").expect(200);
+      assert.equal(Object.keys(schedules.body).length, count);
+      assert.deepEqual(Object.values(schedules.body).map((s) => s.name).sort(),
+        Array.from({ length: count }, (_, i) => `Schedule ${i}`).sort());
+    });
+    const mode = (await fs.stat(dataPath)).mode & 0o777;
+    assert.equal(mode & 0o077, 0, "datastore must remain private");
+  }
+});
+
+test("global request ids conflict across every durable operation kind", async () => {
+  const kinds = ["schedule-create", "schedule-delete", "manual-start", "task-delete"];
+  for (const firstKind of kinds) {
+    for (const secondKind of kinds) {
+      if (firstKind === secondKind) continue;
+      const dataPath = await tempDataPath({
+        schedules: { shared: { ...validSchedule(), enabled: true, lastRun: null } },
+        history: [],
+        operations: {},
+      });
+      const controller = successfulController();
+      controller.state.tasks = [{ id: "shared", zones: [1], runTime: 5, startTime: 1 }];
+      const instance = await createApp({ dataPath, controllerFetch: controller.fetch });
+      const requestId = `cross-kind-${firstKind}-${secondKind}`;
+      const invoke = (client, kind) => {
+        if (kind === "schedule-create") return client.post("/api/schedules/create").send(scheduleCreate(77, requestId));
+        if (kind === "schedule-delete") return client.delete("/api/schedules/delete").send({ id: "shared", requestId });
+        if (kind === "manual-start") return client.post("/api/tasks/create").send({ requestId, zones: [1], runTime: 5 });
+        return client.delete("/api/tasks/delete").send({ id: "shared", requestId });
+      };
+      await withBoundServer(instance.app, async (client) => {
+        const first = await invoke(client, firstKind);
+        assert.ok([201, 202].includes(first.status), `${firstKind} setup returned ${first.status}`);
+        const adds = controller.state.adds;
+        const deletes = controller.state.deletes.length;
+        const second = await invoke(client, secondKind);
+        assert.equal(second.status, 409, `${firstKind} -> ${secondKind}`);
+        assert.match(second.body.error, /another operation/i);
+        assert.equal(controller.state.adds, adds, `${firstKind} -> ${secondKind} must not add a controller task`);
+        assert.equal(controller.state.deletes.length, deletes, `${firstKind} -> ${secondKind} must not delete a controller task`);
+      });
+    }
+  }
+});
+
+test("cross-kind request reuse conflicts after restart and under concurrent claims", async () => {
+  const dataPath = await tempDataPath({
+    schedules: { shared: { ...validSchedule(), enabled: true, lastRun: null } },
+    history: [],
+    operations: {},
   });
-  const mode = (await fs.stat(dataPath)).mode & 0o777;
-  assert.equal(mode & 0o077, 0, "datastore must remain private");
+  const controller = successfulController();
+  controller.state.tasks = [{ id: "shared", zones: [1], runTime: 5, startTime: 1 }];
+  const requestId = "cross-kind-restart-concurrent-0001";
+  const first = await createApp({ dataPath, controllerFetch: controller.fetch });
+  await withBoundServer(first.app, (client) => client.delete("/api/schedules/delete").send({ id: "shared", requestId }).expect(201));
+
+  const restarted = await createApp({ dataPath, controllerFetch: controller.fetch });
+  await withBoundServer(restarted.app, (client) => client.delete("/api/tasks/delete").send({ id: "shared", requestId }).expect(409));
+  assert.equal(controller.state.deletes.length, 0);
+
+  const concurrentPath = await tempDataPath({
+    schedules: { shared: { ...validSchedule(), enabled: true, lastRun: null } },
+    history: [],
+    operations: {},
+  });
+  const concurrentController = successfulController();
+  concurrentController.state.tasks = [{ id: "shared", zones: [1], runTime: 5, startTime: 1 }];
+  const concurrent = await createApp({ dataPath: concurrentPath, controllerFetch: concurrentController.fetch });
+  await withBoundServer(concurrent.app, async (client) => {
+    const body = { id: "shared", requestId: "cross-kind-concurrent-0001" };
+    const results = await Promise.all([
+      client.delete("/api/schedules/delete").send(body),
+      client.delete("/api/tasks/delete").send(body),
+    ]);
+    assert.deepEqual(results.map((result) => result.status).sort((a, b) => a - b), [201, 409]);
+  });
+  assert.ok(concurrentController.state.deletes.length <= 1);
+});
+
+test("legacy operations without a validated kind migrate fail-closed and cannot replay", async () => {
+  const dataPath = await tempDataPath({
+    schedules: {},
+    history: [],
+    operations: {
+      "legacy-untyped-operation-0001": {
+        id: "legacy-untyped-operation-0001",
+        payloadHash: crypto.createHash("sha256").update(JSON.stringify({ id: "shared" })).digest("hex"),
+        state: "completed",
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      "legacy-mismatched-id-0002": {
+        id: "different-operation-id",
+        type: "task-delete",
+        payloadHash: crypto.createHash("sha256").update(JSON.stringify({ id: "shared" })).digest("hex"),
+        state: "completed",
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    },
+  });
+  const controller = successfulController();
+  controller.state.tasks = [{ id: "shared", zones: [1], runTime: 5, startTime: 1 }];
+  const instance = await createApp({ dataPath, controllerFetch: controller.fetch });
+  await withBoundServer(instance.app, (client) => client.delete("/api/tasks/delete").send({
+    id: "shared",
+    requestId: "legacy-untyped-operation-0001",
+  }).expect(409));
+  await withBoundServer(instance.app, (client) => client.delete("/api/tasks/delete").send({
+    id: "shared",
+    requestId: "legacy-mismatched-id-0002",
+  }).expect(409));
+  assert.equal(controller.state.deletes.length, 0);
+  const stored = JSON.parse(await fs.readFile(dataPath, "utf8"));
+  assert.equal(stored.operations["legacy-untyped-operation-0001"].type, "legacy-unknown");
+  assert.equal(stored.operations["legacy-mismatched-id-0002"].type, "legacy-unknown");
 });
 
 test("history ordering uses a monotonic sequence even when upgraded data is unsorted", async () => {

@@ -67,6 +67,10 @@ function digest(value) {
   return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+function operationMatches(operation, requestId, type, payloadHash) {
+  return operation?.id === requestId && operation.type === type && operation.payloadHash === payloadHash;
+}
+
 function operationPublic(operation) {
   return {
     operationId: operation.id,
@@ -191,7 +195,7 @@ export async function createApp(options = {}) {
     const result = await repository.mutate((data) => {
       const prior = data.operations[requestId];
       if (prior) {
-        return prior.type === "schedule-create" && prior.payloadHash === payloadHash
+        return operationMatches(prior, requestId, "schedule-create", payloadHash)
           ? { prior, schedule: data.schedules[prior.scheduleId] }
           : { conflict: true };
       }
@@ -237,7 +241,7 @@ export async function createApp(options = {}) {
     const payloadHash = digest({ id: parsed.id });
     const result = await repository.mutate((data) => {
       const prior = data.operations[parsed.requestId];
-      if (prior) return prior.payloadHash === payloadHash ? { prior } : { conflict: true };
+      if (prior) return operationMatches(prior, parsed.requestId, "schedule-delete", payloadHash) ? { prior } : { conflict: true };
       if (!Object.hasOwn(data.schedules, parsed.id)) return { missing: true };
       delete data.schedules[parsed.id];
       const now = Date.now();
@@ -278,7 +282,7 @@ export async function createApp(options = {}) {
     const payloadHash = digest(payload);
     const claim = await repository.mutate((data) => {
       const prior = data.operations[parsed.requestId];
-      if (prior) return prior.payloadHash === payloadHash ? { prior } : { conflict: true };
+      if (prior) return operationMatches(prior, parsed.requestId, "manual-start", payloadHash) ? { prior } : { conflict: true };
       const now = Date.now();
       const operation = { id: parsed.requestId, type: "manual-start", payloadHash, state: "pending", createdAt: now, updatedAt: now };
       data.operations[parsed.requestId] = operation;
@@ -323,7 +327,7 @@ export async function createApp(options = {}) {
     const payloadHash = digest({ id: parsed.id });
     const claim = await repository.mutate((data) => {
       const prior = data.operations[parsed.requestId];
-      if (prior) return prior.payloadHash === payloadHash ? { prior } : { conflict: true };
+      if (prior) return operationMatches(prior, parsed.requestId, "task-delete", payloadHash) ? { prior } : { conflict: true };
       const now = Date.now();
       const operation = { id: parsed.requestId, type: "task-delete", payloadHash, state: "pending", createdAt: now, updatedAt: now };
       data.operations[parsed.requestId] = operation;
@@ -486,6 +490,10 @@ export async function createApp(options = {}) {
     if (err instanceof SyntaxError && err.status === 400 && "body" in err) return res.status(400).json({ error: "malformed JSON" });
     if (err instanceof ControllerRejectedError) return res.status(502).json({ error: err.message });
     if (err instanceof AmbiguousControllerError) return res.status(503).json({ error: "controller outcome unknown", recovery: "Check controller status before retrying." });
+    if (err?.code === "REPOSITORY_OVERLOADED") {
+      res.set("Retry-After", "1");
+      return res.status(503).json({ error: "datastore busy", recovery: "Retry this same requestId after the indicated delay." });
+    }
     console.error(err.stack ?? err);
     res.status(500).json({ error: "internal error" });
   });

@@ -10,6 +10,45 @@ const REVISION = Symbol("repositoryRevision");
 const SNAPSHOT_FORMAT = 2;
 const MAX_REVISION = Number.MAX_SAFE_INTEGER - 1;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const operationTypes = new Set(["schedule-create", "schedule-delete", "manual-start", "task-delete", "schedule-start"]);
+const admissions = new Map();
+
+export class RepositoryOverloadedError extends Error {
+  constructor() {
+    super("datastore write admission overloaded");
+    this.code = "REPOSITORY_OVERLOADED";
+    this.status = 503;
+  }
+}
+
+function normalizeOperations(operations) {
+  if (!operations || typeof operations !== "object" || Array.isArray(operations)) return {};
+  return Object.fromEntries(Object.entries(operations).map(([id, operation]) => {
+    if (!operation || typeof operation !== "object" || Array.isArray(operation)) {
+      return [id, { id, type: "legacy-unknown", state: "invalid" }];
+    }
+    const validHash = typeof operation.payloadHash === "string" && /^[a-f0-9]{64}$/.test(operation.payloadHash);
+    if (operation.id === id && (operation.type === "legacy-unknown" || (operationTypes.has(operation.type) && validHash))) return [id, operation];
+    return [id, { ...operation, id, type: "legacy-unknown" }];
+  }));
+}
+
+function admit(key, maximum, work) {
+  let admission = admissions.get(key);
+  if (!admission) {
+    admission = { pending: 0, tail: Promise.resolve() };
+    admissions.set(key, admission);
+  }
+  if (admission.pending >= maximum) throw new RepositoryOverloadedError();
+  admission.pending += 1;
+  const result = admission.tail.then(work);
+  const settled = result.finally(() => { admission.pending -= 1; }).then(() => {}, () => {});
+  admission.tail = settled;
+  settled.then(() => {
+    if (admission.pending === 0 && admission.tail === settled) admissions.delete(key);
+  });
+  return result;
+}
 
 function normalize(data, revision = Number.isSafeInteger(data?.[REVISION]) ? data[REVISION] : 0) {
   const normalized = {
@@ -102,6 +141,7 @@ export class JsonRepository {
     recoverMissing = false,
     lockTimeoutMs = 5000,
     staleLockMs = 30000,
+    maxPendingWrites = 1024,
     onDurabilityBoundary = null,
   } = {}) {
     this.dataPath = dataPath;
@@ -110,6 +150,9 @@ export class JsonRepository {
     this.recoverMissing = recoverMissing;
     this.lockTimeoutMs = lockTimeoutMs;
     this.staleLockMs = staleLockMs;
+    if (!Number.isSafeInteger(maxPendingWrites) || maxPendingWrites < 1) throw new TypeError("maxPendingWrites must be a positive integer");
+    this.maxPendingWrites = maxPendingWrites;
+    this.admissionKey = path.resolve(dataPath);
     this.onDurabilityBoundary = onDurabilityBoundary;
   }
 
@@ -157,6 +200,7 @@ export class JsonRepository {
         data = normalize(structuredClone(EMPTY_DATA), 0);
       }
       const result = await mutator(data);
+      data.operations = normalizeOperations(data.operations);
       await this.#writeRevision(data, data[REVISION] + 1);
       return result;
     });
@@ -197,6 +241,7 @@ export class JsonRepository {
     }
 
     const newest = selected.data;
+    newest.operations = normalizeOperations(newest.operations);
     const revision = selected.kind === "v2" ? newest[REVISION] : 1;
     const serialized = serialize(newest, revision);
     const synchronized = primary.raw === serialized && recovery.raw === serialized;
@@ -334,7 +379,11 @@ export class JsonRepository {
     }
   }
 
-  async #withLock(work) {
+  #withLock(work) {
+    return admit(this.admissionKey, this.maxPendingWrites, () => this.#withCrossProcessLock(work));
+  }
+
+  async #withCrossProcessLock(work) {
     const lock = await this.#acquireLock();
     let active = true;
     let renewal = Promise.resolve();
