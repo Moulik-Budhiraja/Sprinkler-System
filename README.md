@@ -57,6 +57,14 @@ owned private temporary datastore and an in-memory controller that cannot
 contact sprinkler hardware. Each demo process is isolated and cleans only its
 own temporary data when it exits.
 
+The JSON datastore acknowledges a mutation only after the same checksummed,
+monotonically revisioned snapshot has replaced and been synced as both the
+primary file and its recovery snapshot. On restart, the newest valid revision
+repairs a missing, corrupt, or older peer. Cross-process writers use a renewable
+owner-token lease; an expired lock is recovered only after its recorded process
+is dead or its process-start identity no longer matches, and only the current
+owner token may release the lock.
+
 ### ESP32
 
 1. Wire the relay board to the ESP32 as defined by the pin-outs in `microcontroller/microcontroller.ino`

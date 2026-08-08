@@ -13,11 +13,11 @@
     <section class="qt" data-dashboard-section="quick-task" data-testid="quick-task" aria-labelledby="quickTaskHeading">
       <form id="quickTaskForm">
         <div class="qt-row">
-          <h2 class="qt-heading" id="quickTaskHeading" data-testid="quick-task-heading">Quick Task</h2>
+          <div class="qt-copy"><div><h2 class="qt-heading" id="quickTaskHeading" data-testid="quick-task-heading">Quick Task</h2><span class="qt-context">Runs once, right now</span></div><p class="qt-hint">Pick at least one zone to start · durations in minutes</p></div>
           <div id="quickZones" class="qt-zones" role="group" aria-label="Zones"></div>
           <span class="qt-sep" aria-hidden="true"></span>
           <div id="quickDurations" class="qt-durations" role="group" aria-label="Duration"></div>
-          <button class="qt-start" type="submit">Start</button>
+          <button class="qt-start" type="submit" disabled>Start</button>
         </div>
         <output id="quickMessage" class="qt-feedback" aria-live="polite"></output>
       </form>

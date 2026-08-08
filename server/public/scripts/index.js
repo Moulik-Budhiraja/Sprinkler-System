@@ -1,6 +1,10 @@
-const VISIBLE_ZONE_COUNT = 6;
+const QUICK_TASK_DURATIONS = window.QuickTaskContract.durations;
+const QUICK_TASK_DEFAULT_DURATION = window.QuickTaskContract.defaultDuration;
+const VISIBLE_ZONE_COUNT = window.QuickTaskContract.visibleZoneCount;
 const selectedZones = new Set();
-let selectedDuration = 10;
+let selectedDuration = QUICK_TASK_DEFAULT_DURATION;
+let quickTaskControllerAvailable = false;
+let quickTaskAmbiguous = false;
 let currentTasks = [];
 let startingZones = [];
 let field;
@@ -67,6 +71,13 @@ function setControllerStatus(state) {
   }
 }
 
+function updateQuickTaskSubmit() {
+  const submit = document.querySelector("#quickTaskForm [type=submit]");
+  if (!submit) return;
+  const validZones = [...selectedZones].every((zone) => Number.isInteger(zone) && zone >= 1 && zone <= VISIBLE_ZONE_COUNT);
+  submit.disabled = !selectedZones.size || !validZones || !quickTaskControllerAvailable || quickTaskAmbiguous;
+}
+
 async function stopTask(task) {
   const id = requestId("stop");
   try {
@@ -94,12 +105,15 @@ async function refreshTasks() {
     const data = await request("/api/tasks");
     currentTasks = Array.isArray(data.tasks) ? data.tasks : [];
     startingZones = [];
+    quickTaskControllerAvailable = true;
     setControllerStatus("online");
     field.update({ tasks: currentTasks, startingZones, stale: false });
   } catch {
+    quickTaskControllerAvailable = false;
     setControllerStatus(currentTasks.length ? "stale" : "offline");
     field.update({ tasks: currentTasks, startingZones, stale: true });
   } finally {
+    updateQuickTaskSubmit();
     refreshInFlight = false;
   }
 }
@@ -117,6 +131,7 @@ function setupQuickTask() {
   const durations = $("#quickDurations");
   const form = $("#quickTaskForm");
   if (!zones || !durations || !form) return;
+  const submit = form.querySelector("[type=submit]");
   for (let zone = 1; zone <= VISIBLE_ZONE_COUNT; zone += 1) {
     const button = node("button", "qt-zone", String(zone));
     button.type = "button";
@@ -125,10 +140,11 @@ function setupQuickTask() {
     button.addEventListener("click", () => {
       selectedZones.has(zone) ? selectedZones.delete(zone) : selectedZones.add(zone);
       button.setAttribute("aria-pressed", String(selectedZones.has(zone)));
+      updateQuickTaskSubmit();
     });
     zones.append(button);
   }
-  for (const minutes of [5, 10, 15, 20]) {
+  for (const minutes of QUICK_TASK_DURATIONS) {
     const button = node("button", "qt-duration", `${minutes}m`);
     button.type = "button";
     button.setAttribute("aria-label", `${minutes} minutes`);
@@ -142,8 +158,7 @@ function setupQuickTask() {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const message = $("#quickMessage");
-    if (!selectedZones.size) { message.textContent = "Select at least one zone"; return; }
-    const submit = event.currentTarget.querySelector("[type=submit]");
+    if (!selectedZones.size || submit.disabled) { message.textContent = window.QuickTaskContract.precondition; return; }
     submit.disabled = true;
     let keepDisabled = false;
     message.textContent = "Starting";
@@ -156,6 +171,7 @@ function setupQuickTask() {
         body: JSON.stringify({ requestId: requestId("manual"), zones: [...selectedZones], runTime: selectedDuration }),
       });
       if (result.outcome === "unknown") {
+        quickTaskAmbiguous = true;
         keepDisabled = true;
         startingZones = [];
         field?.update({ tasks: currentTasks, stale: true });
@@ -168,11 +184,12 @@ function setupQuickTask() {
         await refreshTasks();
       }
     } catch {
+      quickTaskAmbiguous = true;
       keepDisabled = true;
       startingZones = [];
       field?.update({ tasks: currentTasks, stale: true });
       message.textContent = "Could not confirm task · check Status before taking another action";
-    } finally { submit.disabled = keepDisabled; }
+    } finally { submit.disabled = keepDisabled; updateQuickTaskSubmit(); }
   });
 }
 

@@ -1,26 +1,86 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
+const execFileAsync = promisify(execFile);
 const EMPTY_DATA = Object.freeze({ schedules: {}, history: [], operations: {} });
+const REVISION = Symbol("repositoryRevision");
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function normalize(data) {
-  return {
+function normalize(data, revision = Number.isSafeInteger(data?.[REVISION]) ? data[REVISION] : 0) {
+  const normalized = {
     schedules: data && typeof data.schedules === "object" && !Array.isArray(data.schedules) ? data.schedules : {},
     history: Array.isArray(data?.history) ? data.history : [],
     operations: data && typeof data.operations === "object" && !Array.isArray(data.operations) ? data.operations : {},
   };
+  Object.defineProperty(normalized, REVISION, { value: revision, writable: true });
+  return normalized;
 }
 
+function dataPayload(data) {
+  const normalized = normalize(data);
+  return {
+    schedules: normalized.schedules,
+    history: normalized.history,
+    operations: normalized.operations,
+  };
+}
+
+function checksum(data) {
+  return crypto.createHash("sha256").update(JSON.stringify(dataPayload(data))).digest("hex");
+}
+
+function serialize(data, revision) {
+  const payload = dataPayload(data);
+  return `${JSON.stringify({
+    ...payload,
+    _repository: { format: 1, revision, checksum: checksum(payload) },
+  })}\n`;
+}
+
+function parseSnapshot(raw) {
+  const parsed = JSON.parse(raw);
+  const metadata = parsed?._repository;
+  if (metadata === undefined) return normalize(parsed, 0);
+  if (metadata?.format !== 1 || !Number.isSafeInteger(metadata.revision) || metadata.revision < 0 || metadata.checksum !== checksum(parsed)) {
+    throw new Error("invalid datastore revision metadata");
+  }
+  return normalize(parsed, metadata.revision);
+}
+
+async function processStartIdentity(pid) {
+  if (process.platform === "linux") {
+    const stat = await fs.readFile(`/proc/${pid}/stat`, "utf8");
+    const close = stat.lastIndexOf(")");
+    const fieldsAfterCommand = stat.slice(close + 2).split(" ");
+    const startTicks = fieldsAfterCommand[19];
+    if (!/^\d+$/.test(startTicks || "")) throw new Error("invalid process start identity");
+    return `linux:${startTicks}`;
+  }
+  const { stdout } = await execFileAsync("ps", ["-p", String(pid), "-o", "lstart="], { timeout: 1000 });
+  const identity = stdout.trim();
+  if (!identity) throw Object.assign(new Error("process not found"), { code: "ESRCH" });
+  return identity;
+}
+
+const currentProcessStart = processStartIdentity(process.pid);
+
 export class JsonRepository {
-  constructor(dataPath, { recoverMissing = false, lockTimeoutMs = 5000, staleLockMs = 30000 } = {}) {
+  constructor(dataPath, {
+    recoverMissing = false,
+    lockTimeoutMs = 5000,
+    staleLockMs = 30000,
+    onDurabilityBoundary = null,
+  } = {}) {
     this.dataPath = dataPath;
     this.backupPath = `${dataPath}.bak`;
     this.lockPath = `${dataPath}.lock`;
     this.recoverMissing = recoverMissing;
     this.lockTimeoutMs = lockTimeoutMs;
     this.staleLockMs = staleLockMs;
+    this.onDurabilityBoundary = onDurabilityBoundary;
   }
 
   async init() {
@@ -33,7 +93,7 @@ export class JsonRepository {
         await this.#readCurrent({ repair: true });
       } catch (error) {
         if (error.code !== "ENOENT") throw error;
-        await this.#atomicWrite(structuredClone(EMPTY_DATA));
+        await this.#writeRevision(structuredClone(EMPTY_DATA), 1);
       }
     });
     return this;
@@ -46,12 +106,12 @@ export class JsonRepository {
       if (error.code !== "ENOENT" || !this.recoverMissing) throw error;
       return this.#withLock(async () => {
         try {
-          return await this.#readCurrent();
+          return await this.#readCurrent({ repair: true });
         } catch (inner) {
           if (inner.code !== "ENOENT") throw inner;
           const empty = structuredClone(EMPTY_DATA);
-          await this.#atomicWrite(empty);
-          return empty;
+          await this.#writeRevision(empty, 1);
+          return normalize(empty, 1);
         }
       });
     }
@@ -64,83 +124,206 @@ export class JsonRepository {
         data = await this.#readCurrent({ repair: true });
       } catch (error) {
         if (error.code !== "ENOENT" || !this.recoverMissing) throw error;
-        data = structuredClone(EMPTY_DATA);
+        data = normalize(structuredClone(EMPTY_DATA), 0);
       }
       const result = await mutator(data);
-      await this.#atomicWrite(data);
+      await this.#writeRevision(data, data[REVISION] + 1);
       return result;
     });
   }
 
-  async #readCurrent({ repair = false } = {}) {
-    let raw;
+  async #readSnapshot(filePath) {
     try {
-      raw = await fs.readFile(this.dataPath, "utf8");
+      const raw = await fs.readFile(filePath, "utf8");
+      return { filePath, raw, data: parseSnapshot(raw), error: null };
     } catch (error) {
-      if (error.code === "ENOENT") {
-        try {
-          raw = await fs.readFile(this.backupPath, "utf8");
-          const recovered = normalize(JSON.parse(raw));
-          if (repair) await this.#atomicWrite(recovered, { preserveBackup: true });
-          return recovered;
-        } catch (backupError) {
-          if (backupError.code === "ENOENT") throw error;
-          throw backupError;
-        }
-      }
+      return { filePath, raw: null, data: null, error };
+    }
+  }
+
+  async #readCurrent({ repair = false } = {}) {
+    const [primary, recovery] = await Promise.all([
+      this.#readSnapshot(this.dataPath),
+      this.#readSnapshot(this.backupPath),
+    ]);
+    const valid = [primary, recovery].filter((snapshot) => snapshot.data);
+    if (!valid.length) {
+      if (primary.error?.code === "ENOENT" && recovery.error?.code === "ENOENT") throw primary.error;
+      throw primary.error?.code !== "ENOENT" ? primary.error : recovery.error;
+    }
+    valid.sort((left, right) => right.data[REVISION] - left.data[REVISION] || (left.filePath === this.dataPath ? -1 : 1));
+    const newest = valid[0].data;
+    const serialized = serialize(newest, newest[REVISION]);
+    const synchronized = primary.raw === serialized && recovery.raw === serialized;
+    if (repair && !synchronized) await this.#writeRevision(newest, newest[REVISION]);
+    return normalize(newest, newest[REVISION]);
+  }
+
+  async #ownerIsDeadOrReused(owner) {
+    if (!Number.isSafeInteger(owner?.pid) || owner.pid <= 0 || typeof owner.processStart !== "string") return true;
+    try {
+      process.kill(owner.pid, 0);
+    } catch (error) {
+      if (error.code === "ESRCH") return true;
+      if (error.code !== "EPERM") return false;
+    }
+    try {
+      return await processStartIdentity(owner.pid) !== owner.processStart;
+    } catch (error) {
+      return error.code === "ESRCH";
+    }
+  }
+
+  async #recoverExpiredLock() {
+    let stat;
+    try {
+      stat = await fs.stat(this.lockPath);
+    } catch (error) {
+      if (error.code === "ENOENT") return true;
+      throw error;
+    }
+    if (Date.now() - stat.mtimeMs <= this.staleLockMs) return false;
+
+    let owner = null;
+    try {
+      owner = JSON.parse(await fs.readFile(path.join(this.lockPath, "owner.json"), "utf8"));
+    } catch (error) {
+      if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) return false;
+    }
+    if (owner && !(await this.#ownerIsDeadOrReused(owner))) return false;
+
+    // Rename elects exactly one recoverer and prevents an old token from deleting a new lock.
+    const quarantine = `${this.lockPath}.recovered-${process.pid}-${crypto.randomUUID()}`;
+    try {
+      await fs.rename(this.lockPath, quarantine);
+    } catch (error) {
+      if (["ENOENT", "EEXIST", "ENOTEMPTY"].includes(error.code)) return true;
       throw error;
     }
     try {
-      return normalize(JSON.parse(raw));
-    } catch (parseError) {
-      try {
-        const backup = normalize(JSON.parse(await fs.readFile(this.backupPath, "utf8")));
-        if (repair) await this.#atomicWrite(backup, { preserveBackup: true });
-        return backup;
-      } catch {
-        throw parseError;
+      if (owner) {
+        const moved = JSON.parse(await fs.readFile(path.join(quarantine, "owner.json"), "utf8"));
+        if (moved.token !== owner.token) {
+          try { await fs.rename(quarantine, this.lockPath); } catch {}
+          return false;
+        }
       }
+      await fs.rm(quarantine, { recursive: true, force: true });
+      return true;
+    } catch {
+      try { await fs.rename(quarantine, this.lockPath); } catch {}
+      return false;
     }
   }
 
   async #acquireLock() {
     const started = Date.now();
+    const processStart = await currentProcessStart;
     while (true) {
+      const token = crypto.randomUUID();
+      const candidate = `${this.lockPath}.candidate-${process.pid}-${token}`;
       try {
-        await fs.mkdir(this.lockPath, { mode: 0o700 });
-        await fs.writeFile(path.join(this.lockPath, "owner"), `${process.pid}\n`, { mode: 0o600 });
-        return;
+        await fs.mkdir(candidate, { mode: 0o700 });
+        await fs.writeFile(path.join(candidate, "owner.json"), JSON.stringify({
+          version: 1,
+          token,
+          pid: process.pid,
+          processStart,
+          leaseUntil: Date.now() + this.staleLockMs,
+        }), { mode: 0o600 });
+        await fs.rename(candidate, this.lockPath);
+        return { token, processStart };
       } catch (error) {
-        if (error.code !== "EEXIST") throw error;
-        try {
-          const stat = await fs.stat(this.lockPath);
-          if (Date.now() - stat.mtimeMs > this.staleLockMs) {
-            await fs.rm(this.lockPath, { recursive: true, force: true });
-            continue;
-          }
-        } catch (statError) {
-          if (statError.code === "ENOENT") continue;
-          throw statError;
-        }
+        await fs.rm(candidate, { recursive: true, force: true }).catch(() => {});
+        if (!["EEXIST", "ENOTEMPTY"].includes(error.code)) throw error;
+        await this.#recoverExpiredLock();
         if (Date.now() - started >= this.lockTimeoutMs) throw new Error("datastore lock timeout");
         await sleep(8 + Math.floor(Math.random() * 8));
       }
     }
   }
 
-  async #withLock(work) {
-    await this.#acquireLock();
+  async #renewLock(lock) {
+    let owner;
     try {
-      return await work();
+      owner = JSON.parse(await fs.readFile(path.join(this.lockPath, "owner.json"), "utf8"));
+    } catch {
+      return false;
+    }
+    if (owner.token !== lock.token) return false;
+    const tmp = path.join(this.lockPath, `.owner.${lock.token}.tmp`);
+    try {
+      await fs.writeFile(tmp, JSON.stringify({ ...owner, leaseUntil: Date.now() + this.staleLockMs }), { mode: 0o600 });
+      const current = JSON.parse(await fs.readFile(path.join(this.lockPath, "owner.json"), "utf8"));
+      if (current.token !== lock.token) return false;
+      await fs.rename(tmp, path.join(this.lockPath, "owner.json"));
+      const now = new Date();
+      await fs.utimes(this.lockPath, now, now);
+      return true;
+    } catch {
+      return false;
     } finally {
-      await fs.rm(this.lockPath, { recursive: true, force: true });
+      await fs.rm(tmp, { force: true }).catch(() => {});
     }
   }
 
-  async #atomicWrite(data, { preserveBackup = false } = {}) {
-    const directory = path.dirname(this.dataPath);
-    const tmp = path.join(directory, `.${path.basename(this.dataPath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
-    const payload = `${JSON.stringify(normalize(data))}\n`;
+  async #releaseLock(lock) {
+    let owner;
+    try {
+      owner = JSON.parse(await fs.readFile(path.join(this.lockPath, "owner.json"), "utf8"));
+    } catch {
+      return;
+    }
+    if (owner.token !== lock.token) return;
+    const released = `${this.lockPath}.released-${process.pid}-${lock.token}`;
+    try {
+      await fs.rename(this.lockPath, released);
+      const moved = JSON.parse(await fs.readFile(path.join(released, "owner.json"), "utf8"));
+      if (moved.token !== lock.token) {
+        try { await fs.rename(released, this.lockPath); } catch {}
+        return;
+      }
+      await fs.rm(released, { recursive: true, force: true });
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+
+  async #withLock(work) {
+    const lock = await this.#acquireLock();
+    let active = true;
+    let renewal = Promise.resolve();
+    const heartbeatMs = Math.max(10, Math.floor(this.staleLockMs / 3));
+    const heartbeat = setInterval(() => {
+      if (active) renewal = renewal.then(() => this.#renewLock(lock));
+    }, heartbeatMs);
+    heartbeat.unref?.();
+    try {
+      return await work();
+    } finally {
+      active = false;
+      clearInterval(heartbeat);
+      await renewal;
+      await this.#releaseLock(lock);
+    }
+  }
+
+  async #syncDirectory(directory) {
+    try {
+      const dirHandle = await fs.open(directory, "r");
+      try { await dirHandle.sync(); } finally { await dirHandle.close(); }
+    } catch (error) {
+      if (!["EINVAL", "ENOTSUP", "EISDIR"].includes(error.code)) throw error;
+    }
+  }
+
+  async #boundary(name) {
+    await this.onDurabilityBoundary?.(name);
+  }
+
+  async #replaceDurably(target, payload, prefix) {
+    const directory = path.dirname(target);
+    const tmp = path.join(directory, `.${path.basename(target)}.${process.pid}.${crypto.randomUUID()}.tmp`);
     const handle = await fs.open(tmp, "wx", 0o600);
     try {
       await handle.writeFile(payload, "utf8");
@@ -148,21 +331,21 @@ export class JsonRepository {
     } finally {
       await handle.close();
     }
-    if (!preserveBackup) {
-      try {
-        await fs.copyFile(this.dataPath, this.backupPath);
-        await fs.chmod(this.backupPath, 0o600);
-      } catch (error) {
-        if (error.code !== "ENOENT") throw error;
-      }
-    }
-    await fs.rename(tmp, this.dataPath);
-    await fs.chmod(this.dataPath, 0o600);
     try {
-      const dirHandle = await fs.open(directory, "r");
-      try { await dirHandle.sync(); } finally { await dirHandle.close(); }
-    } catch (error) {
-      if (!["EINVAL", "ENOTSUP", "EISDIR"].includes(error.code)) throw error;
+      await fs.rename(tmp, target);
+      await fs.chmod(target, 0o600);
+      await this.#boundary(`${prefix}-renamed`);
+      await this.#syncDirectory(directory);
+      await this.#boundary(`${prefix}-directory-synced`);
+    } finally {
+      await fs.rm(tmp, { force: true }).catch(() => {});
     }
+  }
+
+  async #writeRevision(data, revision) {
+    const payload = serialize(data, revision);
+    await this.#replaceDurably(this.dataPath, payload, "primary");
+    await this.#replaceDurably(this.backupPath, payload, "recovery");
+    data[REVISION] = revision;
   }
 }

@@ -8,6 +8,20 @@ import request from "supertest";
 
 import { createApp } from "../app.js";
 
+async function withBoundServer(app, work) {
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise((resolve, reject) => {
+    server.once("listening", resolve);
+    server.once("error", reject);
+  });
+  try {
+    const address = server.address();
+    return await work(request(`http://127.0.0.1:${address.port}`));
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+}
+
 async function tempDataPath(data = { schedules: {}, history: [], operations: {} }) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "sprinkler-repair-test-"));
   const file = path.join(dir, "data.json");
@@ -74,15 +88,17 @@ test("manual create persists intent and never resends the same request id after 
   const { app } = await createApp({ dataPath, controllerFetch: controller.fetch, controllerTimeoutMs: 100 });
   const payload = { requestId: "manual-20260808-0001", zones: [2, 7], runTime: 5 };
 
-  const first = await request(app).post("/api/tasks/create").send(payload).expect(202);
-  assert.equal(first.body.outcome, "unknown");
-  assert.match(first.body.recovery, /check controller status/i);
-  const second = await request(app).post("/api/tasks/create").send(payload).expect(202);
-  assert.equal(second.body.operationId, first.body.operationId);
-  assert.equal(controller.state.adds, 1, "same request id must never resend");
+  await withBoundServer(app, async (client) => {
+    const first = await client.post("/api/tasks/create").send(payload).expect(202);
+    assert.equal(first.body.outcome, "unknown");
+    assert.match(first.body.recovery, /check controller status/i);
+    const second = await client.post("/api/tasks/create").send(payload).expect(202);
+    assert.equal(second.body.operationId, first.body.operationId);
+    assert.equal(controller.state.adds, 1, "same request id must never resend");
 
-  const operation = await request(app).get(`/api/operations/${first.body.operationId}`).expect(200);
-  assert.equal(operation.body.state, "outcome_unknown");
+    const operation = await client.get(`/api/operations/${first.body.operationId}`).expect(200);
+    assert.equal(operation.body.state, "outcome_unknown");
+  });
   const stored = JSON.parse(await fs.readFile(dataPath, "utf8"));
   assert.equal(stored.history.length, 1);
   assert.equal(stored.history[0].event, "Outcome unknown");
@@ -93,11 +109,13 @@ test("manual request id rejects payload reuse and successful duplicate returns o
   const controller = successfulController();
   const { app } = await createApp({ dataPath, controllerFetch: controller.fetch });
   const requestId = "manual-20260808-0002";
-  const first = await request(app).post("/api/tasks/create").send({ requestId, zones: [1], runTime: 10 }).expect(201);
-  const second = await request(app).post("/api/tasks/create").send({ requestId, zones: [1], runTime: 10 }).expect(200);
-  assert.equal(second.body.operationId, first.body.operationId);
-  assert.equal(controller.state.adds, 1);
-  await request(app).post("/api/tasks/create").send({ requestId, zones: [2], runTime: 10 }).expect(409);
+  await withBoundServer(app, async (client) => {
+    const first = await client.post("/api/tasks/create").send({ requestId, zones: [1], runTime: 10 }).expect(201);
+    const second = await client.post("/api/tasks/create").send({ requestId, zones: [1], runTime: 10 }).expect(200);
+    assert.equal(second.body.operationId, first.body.operationId);
+    assert.equal(controller.state.adds, 1);
+    await client.post("/api/tasks/create").send({ requestId, zones: [2], runTime: 10 }).expect(409);
+  });
 });
 
 test("scheduled watering claims one durable operation before overlapping or lost-response execution", async () => {
@@ -149,8 +167,6 @@ test("mutation schemas reject invalid types, bounds, duplicates, inherited ids a
     { requestId: "__proto__", zones: [1], runTime: 5 },
     { requestId: "request-extra-field", zones: [1], runTime: 5, retry: true },
   ];
-  for (const body of invalidTasks) await request(app).post("/api/tasks/create").send(body).expect(400);
-
   const invalidSchedules = [
     { ...validSchedule(), days: [1, 1] },
     { ...validSchedule(), days: [7] },
@@ -160,9 +176,12 @@ test("mutation schemas reject invalid types, bounds, duplicates, inherited ids a
     { ...validSchedule(), tasks: [{ zones: [1], runTime: 5, hidden: true }] },
     { ...validSchedule(), name: "" },
   ];
-  for (const body of invalidSchedules) await request(app).post("/api/schedules/create").send(body).expect(400);
-  await request(app).put("/api/schedules/update").send({ id: "__proto__", ...validSchedule(), enabled: true }).expect(400);
-  await request(app).post("/api/history/create").send({ zones: [1], event: "Controller exploded", reason: "Fake" }).expect(400);
+  await withBoundServer(app, async (client) => {
+    for (const body of invalidTasks) await client.post("/api/tasks/create").send(body).expect(400);
+    for (const body of invalidSchedules) await client.post("/api/schedules/create").send(body).expect(400);
+    await client.put("/api/schedules/update").send({ id: "__proto__", ...validSchedule(), enabled: true }).expect(400);
+    await client.post("/api/history/create").send({ zones: [1], event: "Controller exploded", reason: "Fake" }).expect(400);
+  });
   assert.equal(controller.state.adds, 0);
 });
 
@@ -170,16 +189,18 @@ test("serialized atomic repository preserves 48 concurrent acknowledged writes a
   const dataPath = await tempDataPath();
   const controller = successfulController();
   const one = await createApp({ dataPath, controllerFetch: controller.fetch });
-  const creates = await Promise.all(Array.from({ length: 48 }, (_, i) =>
-    request(one.app).post("/api/schedules/create").send(validSchedule(i)).expect(201)
-  ));
+  const creates = await withBoundServer(one.app, (client) => Promise.all(Array.from({ length: 48 }, (_, i) =>
+    client.post("/api/schedules/create").send(validSchedule(i)).expect(201)
+  )));
   assert.equal(new Set(creates.map((response) => response.body.id)).size, 48);
 
   const two = await createApp({ dataPath, controllerFetch: controller.fetch });
-  const schedules = await request(two.app).get("/api/schedules").expect(200);
-  assert.equal(Object.keys(schedules.body).length, 48);
-  assert.deepEqual(Object.values(schedules.body).map((s) => s.name).sort(),
-    Array.from({ length: 48 }, (_, i) => `Schedule ${i}`).sort());
+  await withBoundServer(two.app, async (client) => {
+    const schedules = await client.get("/api/schedules").expect(200);
+    assert.equal(Object.keys(schedules.body).length, 48);
+    assert.deepEqual(Object.values(schedules.body).map((s) => s.name).sort(),
+      Array.from({ length: 48 }, (_, i) => `Schedule ${i}`).sort());
+  });
   const mode = (await fs.stat(dataPath)).mode & 0o777;
   assert.equal(mode & 0o077, 0, "datastore must remain private");
 });
@@ -194,7 +215,7 @@ test("history ordering uses a monotonic sequence even when upgraded data is unso
     ],
   });
   const { app } = await createApp({ dataPath, controllerFetch: successfulController().fetch });
-  await request(app).post("/api/history/create").send({ zones: [3], event: "Started", reason: "Remote" }).expect(201);
+  await withBoundServer(app, (client) => client.post("/api/history/create").send({ zones: [3], event: "Started", reason: "Remote" }).expect(201));
   const stored = JSON.parse(await fs.readFile(dataPath, "utf8"));
   assert.equal(stored.history[0].sequence, 10);
 });
@@ -222,8 +243,10 @@ test("zone stop fails closed without deleting or rebuilding unrelated controller
     { id: "queued", zones: [3], runTime: 10, startTime: 0 },
   ];
   const { app } = await createApp({ dataPath, controllerFetch: controller.fetch });
-  const result = await request(app).post("/api/zones").send({ zone: 1, on: false }).expect(409);
-  assert.match(result.body.error, /whole task/i);
+  await withBoundServer(app, async (client) => {
+    const result = await client.post("/api/zones").send({ zone: 1, on: false }).expect(409);
+    assert.match(result.body.error, /whole task/i);
+  });
   assert.deepEqual(controller.state.deletes, []);
   assert.deepEqual(controller.state.tasks.map((task) => task.id), ["running", "queued"]);
 });
@@ -234,12 +257,14 @@ test("overlapping whole-task stop with one request id forwards exactly once", as
   controller.state.tasks = [{ id: "running-once", zones: [4], runTime: 20, startTime: 1 }];
   const { app } = await createApp({ dataPath, controllerFetch: controller.fetch });
   const body = { id: "running-once", requestId: "delete-overlap-0001" };
-  const [first, second] = await Promise.all([
-    request(app).delete("/api/tasks/delete").send(body),
-    request(app).delete("/api/tasks/delete").send(body),
-  ]);
-  assert.ok([200, 201, 202].includes(first.status));
-  assert.ok([200, 201, 202].includes(second.status));
+  await withBoundServer(app, async (client) => {
+    const [first, second] = await Promise.all([
+      client.delete("/api/tasks/delete").send(body),
+      client.delete("/api/tasks/delete").send(body),
+    ]);
+    assert.ok([200, 201, 202].includes(first.status));
+    assert.ok([200, 201, 202].includes(second.status));
+  });
   assert.equal(controller.state.deletes.length, 1);
 });
 
@@ -248,10 +273,14 @@ test("demo instances own unique private stores, recover missing files and clean 
   const b = await createApp({ demo: true });
   assert.notEqual(a.dataPath, b.dataPath);
   assert.equal((await fs.stat(path.dirname(a.dataPath))).mode & 0o077, 0);
-  await request(a.app).post("/api/schedules/create").send(validSchedule(1)).expect(201);
-  assert.equal(Object.keys((await request(b.app).get("/api/schedules")).body).length, 0);
-  await fs.rm(a.dataPath);
-  await request(a.app).get("/api/schedules").expect(200);
+  await withBoundServer(a.app, async (aClient) => {
+    await withBoundServer(b.app, async (bClient) => {
+      await aClient.post("/api/schedules/create").send(validSchedule(1)).expect(201);
+      assert.equal(Object.keys((await bClient.get("/api/schedules")).body).length, 0);
+      await fs.rm(a.dataPath);
+      await aClient.get("/api/schedules").expect(200);
+    });
+  });
   await a.cleanup();
   await assert.rejects(fs.access(path.dirname(a.dataPath)));
   await fs.access(path.dirname(b.dataPath));
@@ -261,37 +290,43 @@ test("demo instances own unique private stores, recover missing files and clean 
 test("same-origin policy rejects cross-site mutations and security/cache headers are explicit", async () => {
   const dataPath = await tempDataPath();
   const { app } = await createApp({ dataPath, controllerFetch: successfulController().fetch });
-  await request(app).post("/api/schedules/create").set("Origin", "https://evil.invalid").set("Host", "yard.local").send(validSchedule()).expect(403);
-  await request(app).post("/api/schedules/create").set("Sec-Fetch-Site", "cross-site").send(validSchedule()).expect(403);
-  await request(app).post("/api/schedules/create").set("Origin", "http://yard.local").set("Host", "yard.local").send(validSchedule()).expect(201);
+  await withBoundServer(app, async (client) => {
+    await client.post("/api/schedules/create").set("Origin", "https://evil.invalid").set("Host", "yard.local").send(validSchedule()).expect(403);
+    await client.post("/api/schedules/create").set("Sec-Fetch-Site", "cross-site").send(validSchedule()).expect(403);
+    await client.post("/api/schedules/create").set("Origin", "http://yard.local").set("Host", "yard.local").send(validSchedule()).expect(201);
 
-  const page = await request(app).get("/").expect(200);
-  assert.equal(page.headers["x-powered-by"], undefined);
-  assert.equal(page.headers["x-content-type-options"], "nosniff");
-  assert.equal(page.headers["x-frame-options"], "DENY");
-  assert.equal(page.headers["referrer-policy"], "no-referrer");
-  assert.match(page.headers["content-security-policy"], /frame-ancestors 'none'/);
-  const api = await request(app).get("/api/schedules").expect(200);
-  assert.match(api.headers["cache-control"], /no-store/);
-  const asset = await request(app).get("/styles/app.css").expect(200);
-  assert.match(asset.headers["cache-control"], /max-age=/);
+    const page = await client.get("/").expect(200);
+    assert.equal(page.headers["x-powered-by"], undefined);
+    assert.equal(page.headers["x-content-type-options"], "nosniff");
+    assert.equal(page.headers["x-frame-options"], "DENY");
+    assert.equal(page.headers["referrer-policy"], "no-referrer");
+    assert.match(page.headers["content-security-policy"], /frame-ancestors 'none'/);
+    const api = await client.get("/api/schedules").expect(200);
+    assert.match(api.headers["cache-control"], /no-store/);
+    const asset = await client.get("/styles/app.css").expect(200);
+    assert.match(asset.headers["cache-control"], /max-age=/);
+  });
 });
 
 test("malformed JSON, oversized bodies, unknown schedules and bounded history retain truthful 4xx status", async () => {
   const dataPath = await tempDataPath();
   const { app } = await createApp({ dataPath, controllerFetch: successfulController().fetch });
-  await request(app).post("/api/schedules/create").set("Content-Type", "application/json").send("{").expect(400);
-  await request(app).post("/api/schedules/create").send({ ...validSchedule(), padding: "x".repeat(70 * 1024) }).expect(413);
-  await request(app).delete("/api/schedules/delete").send({ id: "unknown-safe-id", requestId: "delete-unknown-0001" }).expect(404);
-  await request(app).get("/api/history?limit=0").expect(400);
-  await request(app).get("/api/history?limit=1001").expect(400);
+  await withBoundServer(app, async (client) => {
+    await client.post("/api/schedules/create").set("Content-Type", "application/json").send("{").expect(400);
+    await client.post("/api/schedules/create").send({ ...validSchedule(), padding: "x".repeat(70 * 1024) }).expect(413);
+    await client.delete("/api/schedules/delete").send({ id: "unknown-safe-id", requestId: "delete-unknown-0001" }).expect(404);
+    await client.get("/api/history?limit=0").expect(400);
+    await client.get("/api/history?limit=1001").expect(400);
+  });
 });
 
 test("all approved page routes including status render", async () => {
   const dataPath = await tempDataPath();
   const { app } = await createApp({ dataPath, controllerFetch: successfulController().fetch });
-  for (const route of ["/", "/status", "/quick-task", "/schedules", "/create-schedule", "/edit-schedule", "/activity", "/controller"]) {
-    const response = await request(app).get(route).expect(200);
-    assert.match(response.headers["content-type"], /html/);
-  }
+  await withBoundServer(app, async (client) => {
+    for (const route of ["/", "/status", "/quick-task", "/schedules", "/create-schedule", "/edit-schedule", "/activity", "/controller"]) {
+      const response = await client.get(route).expect(200);
+      assert.match(response.headers["content-type"], /html/);
+    }
+  });
 });

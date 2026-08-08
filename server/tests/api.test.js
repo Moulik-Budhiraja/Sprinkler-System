@@ -7,6 +7,20 @@ import request from "supertest";
 
 import { createApp } from "../app.js";
 
+async function withBoundServer(app, work) {
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise((resolve, reject) => {
+    server.once("listening", resolve);
+    server.once("error", reject);
+  });
+  try {
+    const address = server.address();
+    return await work(request(`http://127.0.0.1:${address.port}`));
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+}
+
 async function tempDataPath(data = { schedules: {}, history: [] }) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "sprinkler-test-"));
   const file = path.join(dir, "data.json");
@@ -44,19 +58,20 @@ test("createApp serves schedules from an injected isolated data file", async () 
     history: [],
   });
   const { app } = await createApp({ dataPath, controllerFetch: async () => new Response("{}") });
-  const res = await request(app).get("/api/schedules").expect(200);
-  assert.equal(res.body.abc.name, "Morning");
-  assert.deepEqual(res.body.abc.tasks[0].zones, [1, 7], "zones 7/8 must survive untouched");
+  await withBoundServer(app, async (client) => {
+    const res = await client.get("/api/schedules").expect(200);
+    assert.equal(res.body.abc.name, "Morning");
+    assert.deepEqual(res.body.abc.tasks[0].zones, [1, 7], "zones 7/8 must survive untouched");
+  });
 });
 
 test("task create forwards zones 1-8 unchanged and logs history", async () => {
   const dataPath = await tempDataPath();
   const stub = controllerStub();
   const { app } = await createApp({ dataPath, controllerFetch: stub.controllerFetch });
-  await request(app)
-    .post("/api/tasks/create")
+  await withBoundServer(app, (client) => client.post("/api/tasks/create")
     .send({ requestId: "manual-api-create-0001", zones: [2, 7, 8], runTime: 10 })
-    .expect(201);
+    .expect(201));
   const add = stub.calls.find((c) => c.url.endsWith("/tasks/add"));
   assert.deepEqual(JSON.parse(add.init.body).tasks[0].zones, [2, 7, 8], "backend must not filter zones 7-8");
   const saved = JSON.parse(await fs.readFile(dataPath, "utf8"));
@@ -70,18 +85,21 @@ test("controller failures surface as non-2xx JSON errors and ambiguous starts ar
   const dataPath = await tempDataPath();
   const failing = async () => new Response("boom", { status: 500 });
   const { app } = await createApp({ dataPath, controllerFetch: failing });
-  const res = await request(app).get("/api/tasks").expect(502);
-  assert.match(res.body.error, /controller/i);
-  const ambiguous = await request(app)
-    .post("/api/tasks/create")
-    .send({ requestId: "manual-api-http500-0001", zones: [1], runTime: 5 })
-    .expect(202);
-  assert.equal(ambiguous.body.outcome, "unknown");
+  await withBoundServer(app, async (client) => {
+    const res = await client.get("/api/tasks").expect(502);
+    assert.match(res.body.error, /controller/i);
+    const ambiguous = await client.post("/api/tasks/create")
+      .send({ requestId: "manual-api-http500-0001", zones: [1], runTime: 5 })
+      .expect(202);
+    assert.equal(ambiguous.body.outcome, "unknown");
+  });
 
   const unreachable = async () => { throw new Error("ECONNREFUSED"); };
   const { app: app2 } = await createApp({ dataPath, controllerFetch: unreachable });
-  await request(app2).get("/api/tasks").expect(503);
-  await request(app2).post("/api/tasks/create").send({ requestId: "manual-api-failure-0001", zones: [1], runTime: 5 }).expect(202);
+  await withBoundServer(app2, async (client) => {
+    await client.get("/api/tasks").expect(503);
+    await client.post("/api/tasks/create").send({ requestId: "manual-api-failure-0001", zones: [1], runTime: 5 }).expect(202);
+  });
   const saved = JSON.parse(await fs.readFile(dataPath, "utf8"));
   assert.equal(saved.history.length, 2, "every ambiguous start must leave a reconciliation record");
   assert.ok(saved.history.every((entry) => entry.event === "Outcome unknown"));
@@ -91,8 +109,10 @@ test("deleting an unknown task id returns 404 and logs nothing", async () => {
   const dataPath = await tempDataPath();
   const stub = controllerStub({ tasks: [{ id: "real", zones: [3], runTime: 5, startTime: 0 }] });
   const { app } = await createApp({ dataPath, controllerFetch: stub.controllerFetch });
-  await request(app).delete("/api/tasks/delete").send({ id: "ghost", requestId: "delete-task-ghost-0001" }).expect(404);
-  await request(app).delete("/api/tasks/delete").send({ id: "real", requestId: "delete-task-real-0001" }).expect(201);
+  await withBoundServer(app, async (client) => {
+    await client.delete("/api/tasks/delete").send({ id: "ghost", requestId: "delete-task-ghost-0001" }).expect(404);
+    await client.delete("/api/tasks/delete").send({ id: "real", requestId: "delete-task-real-0001" }).expect(201);
+  });
   const saved = JSON.parse(await fs.readFile(dataPath, "utf8"));
   assert.equal(saved.history.length, 1);
   assert.equal(saved.history[0].event, "Stopped");
@@ -101,25 +121,25 @@ test("deleting an unknown task id returns 404 and logs nothing", async () => {
 test("schedule create/update/delete roundtrip preserves any zone 1-8", async () => {
   const dataPath = await tempDataPath();
   const { app } = await createApp({ dataPath, controllerFetch: async () => new Response("{}") });
-  await request(app)
-    .post("/api/schedules/create")
-    .send({ name: "Beds", days: [0, 6], startTime: "07:15", tasks: [{ zones: [6, 8], runTime: 20 }] })
-    .expect(201);
-  let saved = JSON.parse(await fs.readFile(dataPath, "utf8"));
-  const id = Object.keys(saved.schedules)[0];
-  assert.deepEqual(saved.schedules[id].tasks[0].zones, [6, 8]);
+  await withBoundServer(app, async (client) => {
+    await client.post("/api/schedules/create")
+      .send({ name: "Beds", days: [0, 6], startTime: "07:15", tasks: [{ zones: [6, 8], runTime: 20 }] })
+      .expect(201);
+    let saved = JSON.parse(await fs.readFile(dataPath, "utf8"));
+    const id = Object.keys(saved.schedules)[0];
+    assert.deepEqual(saved.schedules[id].tasks[0].zones, [6, 8]);
 
-  await request(app)
-    .put("/api/schedules/update")
-    .send({ id, name: "Beds late", days: [0], startTime: "08:00", enabled: false, tasks: [{ zones: [8], runTime: 5 }] })
-    .expect(200);
-  saved = JSON.parse(await fs.readFile(dataPath, "utf8"));
-  assert.equal(saved.schedules[id].name, "Beds late");
-  assert.deepEqual(saved.schedules[id].tasks[0].zones, [8]);
+    await client.put("/api/schedules/update")
+      .send({ id, name: "Beds late", days: [0], startTime: "08:00", enabled: false, tasks: [{ zones: [8], runTime: 5 }] })
+      .expect(200);
+    saved = JSON.parse(await fs.readFile(dataPath, "utf8"));
+    assert.equal(saved.schedules[id].name, "Beds late");
+    assert.deepEqual(saved.schedules[id].tasks[0].zones, [8]);
 
-  await request(app).delete("/api/schedules/delete").send({ id, requestId: "delete-schedule-api-0001" }).expect(201);
-  saved = JSON.parse(await fs.readFile(dataPath, "utf8"));
-  assert.equal(Object.keys(saved.schedules).length, 0);
+    await client.delete("/api/schedules/delete").send({ id, requestId: "delete-schedule-api-0001" }).expect(201);
+    saved = JSON.parse(await fs.readFile(dataPath, "utf8"));
+    assert.equal(Object.keys(saved.schedules).length, 0);
+  });
 });
 
 test("history endpoint returns newest-first records with limit", async () => {
@@ -128,9 +148,11 @@ test("history endpoint returns newest-first records with limit", async () => {
   }));
   const dataPath = await tempDataPath({ schedules: {}, history });
   const { app } = await createApp({ dataPath, controllerFetch: async () => new Response("{}") });
-  const res = await request(app).get("/api/history?limit=10").expect(200);
-  assert.equal(res.body.length, 10);
-  assert.equal(res.body[0].timestamp, 1786141800);
+  await withBoundServer(app, async (client) => {
+    const res = await client.get("/api/history?limit=10").expect(200);
+    assert.equal(res.body.length, 10);
+    assert.equal(res.body[0].timestamp, 1786141800);
+  });
 });
 
 test("demo mode is deterministic and never touches the real controller fetch", async () => {
@@ -138,19 +160,23 @@ test("demo mode is deterministic and never touches the real controller fetch", a
   let realFetchCalls = 0;
   const spy = async () => { realFetchCalls += 1; return new Response("{}"); };
   const { app } = await createApp({ dataPath, demo: true, controllerFetch: spy });
-  const res = await request(app).get("/api/tasks").expect(200);
-  assert.ok(Array.isArray(res.body.tasks));
-  await request(app).post("/api/tasks/create").send({ requestId: "manual-demo-api-0001", zones: [5], runTime: 5 }).expect(201);
-  const after = await request(app).get("/api/tasks").expect(200);
-  assert.ok(after.body.tasks.some((t) => t.zones.includes(5)));
+  await withBoundServer(app, async (client) => {
+    const res = await client.get("/api/tasks").expect(200);
+    assert.ok(Array.isArray(res.body.tasks));
+    await client.post("/api/tasks/create").send({ requestId: "manual-demo-api-0001", zones: [5], runTime: 5 }).expect(201);
+    const after = await client.get("/api/tasks").expect(200);
+    assert.ok(after.body.tasks.some((t) => t.zones.includes(5)));
+  });
   assert.equal(realFetchCalls, 0, "demo mode must be incapable of contacting hardware");
 });
 
 test("page routes render", async () => {
   const dataPath = await tempDataPath();
   const { app } = await createApp({ dataPath, controllerFetch: async () => new Response("{}") });
-  for (const route of ["/", "/status", "/quick-task", "/schedules", "/create-schedule", "/edit-schedule", "/activity", "/controller"]) {
-    const res = await request(app).get(route).expect(200);
-    assert.match(res.headers["content-type"], /html/);
-  }
+  await withBoundServer(app, async (client) => {
+    for (const route of ["/", "/status", "/quick-task", "/schedules", "/create-schedule", "/edit-schedule", "/activity", "/controller"]) {
+      const res = await client.get(route).expect(200);
+      assert.match(res.headers["content-type"], /html/);
+    }
+  });
 });

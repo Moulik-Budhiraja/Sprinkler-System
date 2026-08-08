@@ -188,6 +188,66 @@ test("lost manual response is explicit outcome unknown and never invites blind r
   await expect(page.getByRole("button", { name: "Start", exact: true })).toBeDisabled();
 });
 
+for (const route of ["/", "/quick-task"]) {
+  for (const viewport of [{ width: 1440, height: 900 }, ...mobileViewports]) {
+    test(`${route} Quick Task enforces the shared contract at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await page.goto(route);
+      await page.waitForLoadState("networkidle");
+      await expect(page.getByText("Runs once, right now", { exact: true })).toBeVisible();
+      await expect(page.getByText("Pick at least one zone to start · durations in minutes", { exact: true })).toBeVisible();
+
+      const presetNames = await page.locator(route === "/" ? ".qt-duration" : ".preset").allTextContents();
+      expect(presetNames.map((text) => Number.parseInt(text, 10))).toEqual([5, 15, 30, 60]);
+      if (route === "/") {
+        const panel = await rect(page.locator("[data-testid=quick-task]"));
+        for (const control of await page.locator(".qt-zone,.qt-duration,.qt-start").all()) {
+          const bounds = await rect(control);
+          expect(bounds.x).toBeGreaterThanOrEqual(panel.x);
+          expect(bounds.y).toBeGreaterThanOrEqual(panel.y);
+          expect(bounds.right).toBeLessThanOrEqual(panel.right);
+          expect(bounds.bottom).toBeLessThanOrEqual(panel.bottom);
+        }
+        const copyClips = await page.locator(".qt-copy").evaluate((node) => node.scrollWidth > node.clientWidth + 1 || node.scrollHeight > node.clientHeight + 1);
+        expect(copyClips).toBe(false);
+      }
+      const start = page.getByRole("button", { name: route === "/" ? "Start" : "Start watering", exact: true });
+      await expect(start).toBeDisabled();
+
+      if (route === "/") {
+        await expect(page.getByRole("button", { name: "15 minutes" })).toHaveAttribute("aria-pressed", "true");
+        const zone = page.getByRole("button", { name: "Zone 1", exact: true });
+        await zone.click();
+        await expect(start).toBeEnabled();
+        await page.request.post("/__test/controller", { data: { mode: "offline" } });
+        await page.getByRole("button", { name: /Refresh controller status/i }).click();
+        await expect(start).toBeDisabled();
+        await zone.click();
+      } else {
+        await expect(page.locator("#duration")).toHaveValue("15");
+        const zone = page.locator("#zone1");
+        await zone.check();
+        await expect(start).toBeEnabled();
+        await page.request.post("/__test/controller", { data: { mode: "offline" } });
+        await expect(start).toBeDisabled({ timeout: 5000 });
+        await zone.uncheck();
+      }
+      await expect(start).toBeDisabled();
+    });
+  }
+}
+
+test("dedicated Quick Task keeps Start disabled after an ambiguous response", async ({ page }) => {
+  await page.request.post("/__test/controller", { data: { mode: "lost-response", tasks: [] } });
+  await page.goto("/quick-task");
+  await page.locator("#zone1").check();
+  const start = page.getByRole("button", { name: "Start watering", exact: true });
+  await expect(start).toBeEnabled();
+  await start.click();
+  await expect(page.locator("#taskFeedback")).toContainText(/outcome unknown/i);
+  await expect(start).toBeDisabled();
+});
+
 test("forms stay compact, non-lawn, labeled and accessible", async ({ page }) => {
   for (const viewport of [{ width: 1440, height: 900 }, ...mobileViewports]) {
     await page.setViewportSize(viewport);
