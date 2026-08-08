@@ -436,6 +436,8 @@ button:disabled {
 .field-tufts {
   position: absolute;
   inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
   pointer-events: none;
 }
 
