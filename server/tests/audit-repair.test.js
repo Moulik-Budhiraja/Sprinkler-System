@@ -137,6 +137,145 @@ test("manual request id rejects payload reuse and successful duplicate returns o
   });
 });
 
+test("mutation admission reports definitive not-applied overload with same-request recovery", async () => {
+  const dataPath = await tempDataPath();
+  const controller = successfulController();
+  const instance = await createApp({
+    dataPath,
+    controllerFetch: controller.fetch,
+    repositoryOptions: { maxPendingWrites: 1 },
+  });
+  let release;
+  const blocked = new Promise((resolve) => { release = resolve; });
+  let admitted;
+  const started = new Promise((resolve) => { admitted = resolve; });
+  const blocker = instance.repository.mutate(async () => { admitted(); await blocked; });
+  await started;
+  const safetyRelease = setTimeout(release, 100);
+  try {
+    await withBoundServer(instance.app, async (client) => {
+      const response = await client.post("/api/tasks/create").send({
+        requestId: "manual-pre-admission-overload-0001",
+        zones: [1],
+        runTime: 5,
+      }).expect(503);
+      assert.equal(response.headers["retry-after"], "1");
+      assert.equal(response.body.outcome, "not_applied");
+      assert.equal(response.body.requestId, "manual-pre-admission-overload-0001");
+      assert.match(response.body.recovery, /same requestId/i);
+    });
+    assert.equal(controller.state.adds, 0);
+  } finally {
+    clearTimeout(safetyRelease);
+    release();
+    await blocker;
+  }
+});
+
+test("post-controller completion overload returns durable unknown and same key never resends", async () => {
+  const dataPath = await tempDataPath();
+  const controller = successfulController();
+  let release;
+  const blocked = new Promise((resolve) => { release = resolve; });
+  let blocker;
+  const instance = await createApp({
+    dataPath,
+    controllerFetch: controller.fetch,
+    repositoryOptions: { maxPendingWrites: 1 },
+    afterControllerContact({ repository, type }) {
+      if (type !== "manual-start" || blocker) return;
+      blocker = repository.mutate(async () => { await blocked; });
+    },
+  });
+  const payload = { requestId: "manual-post-controller-overload-0001", zones: [2], runTime: 5 };
+  try {
+    await withBoundServer(instance.app, async (client) => {
+      const first = await client.post("/api/tasks/create").send(payload).expect(202);
+      assert.equal(first.body.outcome, "unknown");
+      assert.equal(first.body.state, "pending");
+      assert.equal(first.body.operationId, payload.requestId);
+      assert.match(first.body.recovery, /will not be sent again/i);
+      const status = await client.get(`/api/operations/${payload.requestId}`).expect(200);
+      assert.equal(status.body.outcome, "unknown");
+      release();
+      await blocker;
+      const replay = await client.post("/api/tasks/create").send(payload).expect(202);
+      assert.equal(replay.body.operationId, payload.requestId);
+      assert.equal(controller.state.adds, 1);
+    });
+  } finally {
+    release?.();
+    await blocker;
+  }
+});
+
+test("schedule and Stop admission overload bodies are definitive and preserve request identity", async () => {
+  const dataPath = await tempDataPath();
+  const controller = successfulController();
+  controller.state.tasks = [{ id: "busy-stop-task", zones: [4], runTime: 10, startTime: 1 }];
+  const instance = await createApp({ dataPath, controllerFetch: controller.fetch, repositoryOptions: { maxPendingWrites: 1 } });
+  let release;
+  let admitted;
+  const blocker = instance.repository.mutate(async () => {
+    admitted?.();
+    await new Promise((resolve) => { release = resolve; });
+  });
+  await new Promise((resolve) => { admitted = resolve; });
+  // The mutator can begin before the callback assignment on very fast filesystems.
+  if (!release) await new Promise((resolve) => setTimeout(resolve, 10));
+  try {
+    await withBoundServer(instance.app, async (client) => {
+      const scheduleId = "schedule-pre-admission-overload-0001";
+      const schedule = await client.post("/api/schedules/create").send(scheduleCreate(88, scheduleId)).expect(503);
+      assert.equal(schedule.body.outcome, "not_applied");
+      assert.equal(schedule.body.requestId, scheduleId);
+      assert.equal(schedule.headers["retry-after"], "1");
+      const stopId = "stop-pre-admission-overload-0001";
+      const stop = await client.delete("/api/tasks/delete").send({ id: "busy-stop-task", requestId: stopId }).expect(503);
+      assert.equal(stop.body.outcome, "not_applied");
+      assert.equal(stop.body.requestId, stopId);
+      assert.equal(stop.headers["retry-after"], "1");
+    });
+    assert.equal(controller.state.deletes.length, 0);
+  } finally {
+    release();
+    await blocker;
+  }
+});
+
+test("post-controller Stop completion overload stays pending and same key never deletes twice", async () => {
+  const dataPath = await tempDataPath();
+  const controller = successfulController();
+  controller.state.tasks = [{ id: "post-overload-stop", zones: [4], runTime: 10, startTime: 1 }];
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let blocker;
+  const instance = await createApp({
+    dataPath,
+    controllerFetch: controller.fetch,
+    repositoryOptions: { maxPendingWrites: 1 },
+    afterControllerContact({ repository, type }) {
+      if (type === "task-delete" && !blocker) blocker = repository.mutate(async () => { await gate; });
+    },
+  });
+  const payload = { id: "post-overload-stop", requestId: "stop-post-controller-overload-0001" };
+  try {
+    await withBoundServer(instance.app, async (client) => {
+      const first = await client.delete("/api/tasks/delete").send(payload).expect(202);
+      assert.equal(first.body.state, "pending");
+      assert.equal(first.body.outcome, "unknown");
+      assert.equal(controller.state.deletes.length, 1);
+      release();
+      await blocker;
+      await client.delete("/api/tasks/delete").send(payload).expect(202);
+      assert.equal(controller.state.deletes.length, 1);
+    });
+  } finally {
+    release?.();
+    await blocker;
+  }
+});
+
 test("schedule create atomically deduplicates concurrent and restarted requests and rejects key conflicts", async () => {
   const dataPath = await tempDataPath();
   const payload = scheduleCreate(41, "schedule-create-concurrent-0001");

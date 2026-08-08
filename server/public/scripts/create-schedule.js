@@ -112,33 +112,39 @@ async function submitSchedule(submission) {
   saveButton.disabled = true;
   saveButton.textContent = "Save schedule";
   feedback.textContent = "Saving";
-  try {
-    const response = await fetch("/api/schedules/create", {
+  const { _retryAt, ...wireSubmission } = submission;
+  const result = await window.MutationRecovery.send("/api/schedules/create", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(submission),
+      body: JSON.stringify(wireSubmission),
     });
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({}));
-      const error = new Error(body.error || "Save failed");
-      error.definitive = true;
-      throw error;
-    }
+  if (result.kind === "committed") {
     clearPendingSubmission();
     feedback.textContent = "Saved";
     window.location.assign("/schedules");
-  } catch (error) {
-    if (error.definitive) {
-      clearPendingSubmission();
-      setFormLocked(false);
-      saveButton.disabled = false;
-      feedback.textContent = error.message;
-      return;
-    }
-    setFormLocked(true);
-    feedback.textContent = "Outcome unknown · checking the durable save result before another action.";
-    await reconcileScheduleCreate(submission);
+    return;
   }
+  if (result.kind === "not_applied") {
+    submission._retryAt = Date.now() + result.retryAfter * 1000;
+    rememberPendingSubmission(submission);
+    setFormLocked(true);
+    saveButton.textContent = "Retry save";
+    saveButton.disabled = true;
+    feedback.textContent = `Datastore busy · not applied. Retry this same request in ${result.retryAfter} second${result.retryAfter === 1 ? "" : "s"}.`;
+    await delay(result.retryAfter * 1000);
+    saveButton.disabled = false;
+    return;
+  }
+  if (result.kind === "conflict" || result.kind === "definitive_error") {
+    clearPendingSubmission();
+    setFormLocked(false);
+    saveButton.disabled = false;
+    feedback.textContent = result.kind === "conflict" ? `Save conflict · ${result.data.error}. Refresh or edit before saving again.` : result.data.error || "Save failed";
+    return;
+  }
+  setFormLocked(true);
+  feedback.textContent = "Outcome unknown · checking the durable save result before another action.";
+  await reconcileScheduleCreate(submission);
 }
 
 saveButton.addEventListener("click", async () => {
@@ -180,6 +186,14 @@ function restorePendingSubmission() {
   tasks.splice(0, tasks.length, ...structuredClone(restored.tasks));
   renderTasks();
   setFormLocked(true);
+  if (Number.isFinite(restored._retryAt)) {
+    const remaining = Math.max(0, restored._retryAt - Date.now());
+    feedback.textContent = "Datastore busy · not applied. Retry only this same request.";
+    saveButton.textContent = "Retry save";
+    saveButton.disabled = remaining > 0;
+    if (remaining > 0) setTimeout(() => { saveButton.disabled = false; }, remaining);
+    return;
+  }
   feedback.textContent = "Outcome unknown · checking the durable save result before another action.";
   void reconcileScheduleCreate(restored);
 }

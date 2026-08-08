@@ -8,6 +8,7 @@
 .dashboard .qt-zone,.dashboard .qt-duration{min-width:30px;width:30px;min-height:32px;height:32px;border-radius:7px;font-size:12px}
 .dashboard .qt-start{min-height:32px;height:32px;padding:0 13px;border-radius:7px}
 .qt-feedback:empty{display:none}
+.field-mutation-feedback{display:block;min-height:18px;margin:6px 2px 0;color:var(--amber);font-size:12px}.field-mutation-feedback:empty{display:none}
 .lawn-field{position:relative;border-radius:18px;background:#0d1815;aspect-ratio:1140/524}
 .section-head,.data-page-head,.schedule-row-top,.schedule-actions,.form-actions,.freshness-line{display:flex;align-items:center}
 .section-head{justify-content:space-between;border-bottom:1px solid var(--line)}

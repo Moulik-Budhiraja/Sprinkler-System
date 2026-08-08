@@ -209,6 +209,249 @@ test("schedule create retries only the same stable key after reconciliation conf
   expect(requestIds[0]).toBe(requestIds[1]);
 });
 
+for (const viewport of [{ width: 1440, height: 900 }, ...mobileViewports]) {
+  test(`schedule create retains semantic payload and request key across 503, delay and reload at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+  await page.setViewportSize(viewport);
+  const requestIds = [];
+  await page.route("**/api/schedules/create", async (route) => {
+    requestIds.push(route.request().postDataJSON().requestId);
+    if (requestIds.length === 1) return route.fulfill({
+      status: 503,
+      headers: { "Retry-After": "1" },
+      contentType: "application/json",
+      body: JSON.stringify({ error: "datastore busy", outcome: "not_applied", recovery: "Not applied. Retry this same requestId after the indicated delay." }),
+    });
+    return route.continue();
+  });
+  await page.goto("/create-schedule");
+  await page.locator("#scheduleName").fill("Busy retained schedule");
+  await page.locator("#startTime").fill("08:25");
+  await page.locator("#day3").check();
+  await page.locator("#zone3").check();
+  await page.locator("#duration").fill("12");
+  await page.locator("#addTaskBtn").click();
+  await page.locator("#saveBtn").click();
+  await expect(page.locator("#formFeedback")).toContainText(/datastore busy.*same request.*1 second/i);
+  await expect(page.locator("#saveBtn")).toBeDisabled();
+  await expect(page.locator("#saveBtn")).toBeEnabled({ timeout: 2500 });
+  await page.reload();
+  await expect(page.locator("#scheduleName")).toHaveValue("Busy retained schedule");
+  await expect(page.locator("#scheduleName")).toBeDisabled();
+  await expect(page.locator("#saveBtn")).toHaveText(/retry/i);
+  await expect(page.locator("#saveBtn")).toBeEnabled({ timeout: 2500 });
+  await page.locator("#saveBtn").click();
+  await expect(page).toHaveURL(/\/schedules$/);
+  expect(requestIds).toHaveLength(2);
+  expect(requestIds[0]).toBe(requestIds[1]);
+  });
+}
+
+for (const route of ["/", "/quick-task"]) {
+  for (const viewport of [{ width: 1440, height: 900 }, ...mobileViewports]) {
+  test(`${route} retains one Quick Task key and payload through definitive overload and reload at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    const requestIds = [];
+    await page.route("**/api/tasks/create", async (intercept) => {
+      requestIds.push(intercept.request().postDataJSON().requestId);
+      if (requestIds.length === 1) return intercept.fulfill({
+        status: 503,
+        headers: { "Retry-After": "1" },
+        contentType: "application/json",
+        body: JSON.stringify({ error: "datastore busy", outcome: "not_applied", recovery: "Not applied. Retry this same requestId after the indicated delay." }),
+      });
+      return intercept.continue();
+    });
+    await page.goto(route);
+    if (route === "/") await page.getByRole("button", { name: "Zone 2", exact: true }).click();
+    else await page.locator("#zone2").check();
+    const start = page.getByRole("button", { name: route === "/" ? "Start" : "Start watering", exact: true });
+    await start.click();
+    const feedback = page.locator(route === "/" ? "#quickMessage" : "#taskFeedback");
+    await expect(feedback).toContainText(/datastore busy.*same request.*1 second/i);
+    await expect(start).toBeDisabled();
+    await expect(start).toBeEnabled({ timeout: 2500 });
+    await page.reload();
+    const restored = page.getByRole("button", { name: route === "/" ? "Start" : "Start watering", exact: true });
+    if (route === "/") await expect(page.getByRole("button", { name: "Zone 2", exact: true })).toHaveAttribute("aria-pressed", "true");
+    else await expect(page.locator("#zone2")).toBeChecked();
+    await expect(restored).toBeEnabled({ timeout: 2500 });
+    await restored.click();
+    await expect(page).toHaveURL(/\/$/);
+    expect(requestIds).toHaveLength(2);
+    expect(requestIds[0]).toBe(requestIds[1]);
+  });
+  }
+}
+
+for (const route of ["/", "/quick-task"]) {
+  for (const viewport of [{ width: 1440, height: 900 }, ...mobileViewports]) {
+    test(`${route} preserves one controller add through causal post-controller saturation and reload at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await page.request.post("/__test/controller", { data: { mode: "post-controller-overload", tasks: [] } });
+      await page.goto(route);
+      if (route === "/") await page.getByRole("button", { name: "Zone 3", exact: true }).click();
+      else await page.locator("#zone3").check();
+      const start = page.getByRole("button", { name: route === "/" ? "Start" : "Start watering", exact: true });
+      await start.click();
+      const feedback = page.locator(route === "/" ? "#quickMessage" : "#taskFeedback");
+      await expect(feedback).toContainText(/outcome unknown/i);
+      const beforeReload = await page.request.get("/__test/state");
+      expect((await beforeReload.json()).adds).toBe(1);
+      await page.reload();
+      await expect(feedback).toContainText(/outcome unknown/i);
+      await expect(page.getByRole("button", { name: route === "/" ? "Start" : "Start watering", exact: true })).toBeDisabled();
+      const afterReload = await page.request.get("/__test/state");
+      expect((await afterReload.json()).adds).toBe(1);
+    });
+  }
+}
+
+const quickOutcomeCases = [
+  { name: "202", status: 202, body: { operationId: "pending-browser-operation-0001", state: "pending", outcome: "unknown", recovery: "This request will not be sent again." } },
+  { name: "409", status: 409, body: { error: "requestId was already used for another operation" } },
+  { name: "network reset", status: 0, body: {} },
+];
+for (const route of ["/", "/quick-task"]) {
+  for (const viewport of [{ width: 1440, height: 900 }, ...mobileViewports]) {
+    for (const outcome of quickOutcomeCases) {
+      test(`${route} classifies ${outcome.name} without stale-state lies at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+        await page.setViewportSize(viewport);
+        const requestIds = [];
+        await page.route("**/api/operations/**", (operationRoute) => operationRoute.fulfill({
+          status: outcome.name === "202" ? 200 : 404,
+          contentType: "application/json",
+          body: JSON.stringify(outcome.name === "202" ? outcome.body : { error: "operation not found" }),
+        }));
+        await page.route("**/api/tasks/create", async (intercept) => {
+          requestIds.push(intercept.request().postDataJSON().requestId);
+          if (outcome.name === "network reset" && requestIds.length === 1) return intercept.abort("connectionreset");
+          if (outcome.name === "network reset") return intercept.continue();
+          return intercept.fulfill({ status: outcome.status, contentType: "application/json", body: JSON.stringify(outcome.body) });
+        });
+        await page.goto(route);
+        if (route === "/") await page.getByRole("button", { name: "Zone 1", exact: true }).click();
+        else await page.locator("#zone1").check();
+        const start = page.getByRole("button", { name: route === "/" ? "Start" : "Start watering", exact: true });
+        await start.click();
+        const feedback = page.locator(route === "/" ? "#quickMessage" : "#taskFeedback");
+        if (outcome.name === "409") {
+          await expect(feedback).toContainText(/conflict.*refresh.*edit/i);
+          if (route === "/") {
+            await expect(page.locator("[data-testid=controller-freshness]")).toHaveText("Controller status current");
+            await page.getByRole("button", { name: "Zone 2", exact: true }).click();
+          } else {
+            await page.locator("#zone2").check();
+          }
+          await expect(start).toBeEnabled();
+        } else if (outcome.name === "202") {
+          await expect(feedback).toContainText(/outcome unknown/i);
+          await expect(start).toBeDisabled();
+          await page.reload();
+          await expect(page.getByRole("button", { name: route === "/" ? "Start" : "Start watering", exact: true })).toBeDisabled();
+          expect(requestIds).toHaveLength(1);
+        } else {
+          await expect(feedback).toContainText(/retry only this same request/i, { timeout: 2500 });
+          await expect(start).toBeEnabled();
+          await page.reload();
+          const restored = page.getByRole("button", { name: route === "/" ? "Start" : "Start watering", exact: true });
+          await expect(restored).toBeEnabled({ timeout: 2500 });
+          await restored.click();
+          expect(requestIds).toHaveLength(2);
+          expect(requestIds[0]).toBe(requestIds[1]);
+        }
+      });
+    }
+  }
+}
+
+for (const route of ["/", "/quick-task"]) {
+  test(`${route} treats a durable controller rejection after network loss as definitive`, async ({ page }) => {
+    let requestId;
+    await page.route("**/api/tasks/create", async (route) => {
+      requestId = route.request().postDataJSON().requestId;
+      await route.abort("connectionreset");
+    });
+    await page.route("**/api/operations/**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ operationId: requestId, state: "rejected", outcome: "rejected", recovery: "Controller rejected the request." }) }));
+    await page.goto(route);
+    if (route === "/") {
+      await page.getByRole("button", { name: "Zone 2", exact: true }).click();
+      await page.getByRole("button", { name: "Start", exact: true }).click();
+      await expect(page.locator("#quickMessage")).toContainText(/rejected.*edit|edit.*rejected/i);
+      await expect(page.locator("[data-testid=controller-freshness]")).toHaveText("Controller status current");
+    } else {
+      await page.locator("#zone2").check();
+      await page.getByRole("button", { name: "Start watering", exact: true }).click();
+      await expect(page.locator("#taskFeedback")).toContainText(/rejected.*edit|edit.*rejected/i);
+      await expect(page).toHaveURL(/\/quick-task$/);
+    }
+  });
+}
+
+const stopOutcomeCases = [
+  { name: "503", status: 503, body: { error: "datastore busy", outcome: "not_applied", recovery: "Retry this same requestId." }, headers: { "Retry-After": "1" } },
+  { name: "202", status: 202, body: { operationId: "pending-stop-operation-0001", state: "pending", outcome: "unknown" } },
+  { name: "409", status: 409, body: { error: "requestId was already used for another operation" } },
+  { name: "network reset", status: 0, body: {} },
+];
+for (const viewport of [{ width: 1440, height: 900 }, ...mobileViewports]) {
+  for (const outcome of stopOutcomeCases) {
+    test(`Stop classifies ${outcome.name}, preserves key and online state at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      const requestIds = [];
+      await page.route("**/api/operations/**", (operationRoute) => operationRoute.fulfill({
+        status: outcome.name === "202" ? 200 : 404,
+        contentType: "application/json",
+        body: JSON.stringify(outcome.name === "202" ? outcome.body : { error: "operation not found" }),
+      }));
+      await page.route("**/api/tasks/delete", async (intercept) => {
+        requestIds.push(intercept.request().postDataJSON().requestId);
+        if ((outcome.name === "503" || outcome.name === "network reset") && requestIds.length > 1) return intercept.continue();
+        if (outcome.name === "network reset") return intercept.abort("connectionreset");
+        return intercept.fulfill({ status: outcome.status, headers: outcome.headers, contentType: "application/json", body: JSON.stringify(outcome.body) });
+      });
+      await page.goto("/status");
+      await page.getByRole("button", { name: /Zone 4.*watering/i }).click();
+      await page.getByRole("button", { name: /^Stop watering/i }).click();
+      const feedback = page.locator("#fieldMutationFeedback");
+      await expect(page.locator("[data-testid=controller-freshness]")).toHaveText("Controller status current");
+      if (outcome.name === "503") {
+        await expect(feedback).toContainText(/not applied.*same Stop.*1 second/i);
+        await page.waitForTimeout(1050);
+      } else if (outcome.name === "202") {
+        await expect(feedback).toContainText(/outcome unknown/i);
+        expect(requestIds).toHaveLength(1);
+        return;
+      } else if (outcome.name === "409") {
+        await expect(feedback).toContainText(/conflict.*refresh/i);
+        expect(requestIds).toHaveLength(1);
+        return;
+      } else {
+        await expect(feedback).toContainText(/retry only this same Stop/i, { timeout: 2500 });
+      }
+      await page.getByRole("button", { name: /^Stop watering/i }).click();
+      await expect(feedback).toHaveText("Task stopped");
+      expect(requestIds).toHaveLength(2);
+      expect(requestIds[0]).toBe(requestIds[1]);
+    });
+  }
+}
+
+test("definitive Stop conflict keeps truthful online task state and gives concise recovery", async ({ page }) => {
+  await page.route("**/api/tasks/delete", (route) => route.fulfill({
+    status: 409,
+    contentType: "application/json",
+    body: JSON.stringify({ error: "requestId was already used for another operation" }),
+  }));
+  await page.goto("/status");
+  await page.getByRole("button", { name: /Zone 4.*watering/i }).click();
+  await page.getByRole("button", { name: /^Stop watering/i }).click();
+  await expect(page.locator("#fieldMutationFeedback")).toContainText(/conflict.*refresh/i);
+  await expect(page.locator("[data-testid=controller-freshness]")).toHaveText("Controller status current");
+  await expect(page.getByRole("button", { name: /Zone 4.*watering/i })).toBeVisible();
+  await page.getByRole("button", { name: /^Stop watering/i }).click();
+  await expect(page.locator("#fieldMutationFeedback")).toContainText(/refresh required/i);
+});
+
 test("all mobile interactive targets meet 44 by 44 CSS pixels", async ({ page }) => {
   for (const viewport of mobileViewports) {
     await page.setViewportSize(viewport);

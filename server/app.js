@@ -72,15 +72,16 @@ function operationMatches(operation, requestId, type, payloadHash) {
 }
 
 function operationPublic(operation) {
+  const unresolved = operation.state === "pending" || operation.state === "outcome_unknown";
   return {
     operationId: operation.id,
     type: operation.type,
     state: operation.state,
-    outcome: operation.state === "outcome_unknown" ? "unknown" : operation.state,
+    outcome: unresolved ? "unknown" : operation.state,
     createdAt: operation.createdAt,
     updatedAt: operation.updatedAt,
     scheduleId: operation.type === "schedule-create" ? operation.scheduleId : undefined,
-    recovery: operation.state === "outcome_unknown"
+    recovery: unresolved
       ? "Outcome unknown. Check controller status before taking another action. This request will not be sent again."
       : undefined,
   };
@@ -112,7 +113,7 @@ export async function createApp(options = {}) {
   }
   dataPath ??= savePath;
 
-  const repository = await new JsonRepository(dataPath, { recoverMissing: demo }).init();
+  const repository = await new JsonRepository(dataPath, { recoverMissing: demo, ...options.repositoryOptions }).init();
   const controllerHost = options.controllerHost ?? `http://${process.env.MICROCONTROLLER_HOST}`;
   const controllerFetch = demo ? createSyntheticController() : options.controllerFetch ?? ((url, init) => fetch(url, init));
   const controllerTimeoutMs = options.controllerTimeoutMs ?? 4000;
@@ -300,6 +301,7 @@ export async function createApp(options = {}) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tasks: [payload] }),
       }, true);
+      await options.afterControllerContact?.({ repository, type: "manual-start", requestId: parsed.requestId });
       const completed = await repository.mutate((data) => {
         const operation = data.operations[parsed.requestId];
         operation.state = "completed";
@@ -309,14 +311,23 @@ export async function createApp(options = {}) {
       });
       return res.status(201).json(operationPublic(completed));
     } catch (error) {
+      if (error?.code === "REPOSITORY_OVERLOADED") {
+        return res.status(202).json(operationPublic(claim.operation));
+      }
       const state = error instanceof ControllerRejectedError ? "rejected" : "outcome_unknown";
-      const operation = await repository.mutate((data) => {
-        const current = data.operations[parsed.requestId];
-        current.state = state;
-        current.updatedAt = Date.now();
-        if (state === "outcome_unknown") addHistory(data, parsed.zones, "Outcome unknown", "Remote", undefined, current.id);
-        return current;
-      });
+      let operation;
+      try {
+        operation = await repository.mutate((data) => {
+          const current = data.operations[parsed.requestId];
+          current.state = state;
+          current.updatedAt = Date.now();
+          if (state === "outcome_unknown") addHistory(data, parsed.zones, "Outcome unknown", "Remote", undefined, current.id);
+          return current;
+        });
+      } catch (persistenceError) {
+        if (persistenceError?.code === "REPOSITORY_OVERLOADED") return res.status(202).json(operationPublic(claim.operation));
+        throw persistenceError;
+      }
       if (state === "rejected") return res.status(502).json({ ...operationPublic(operation), error: error.message });
       return res.status(202).json(operationPublic(operation));
     }
@@ -359,26 +370,37 @@ export async function createApp(options = {}) {
       });
       return res.status(404).json({ error: "task not found" });
     }
-    await repository.mutate((data) => { data.operations[parsed.requestId].zones = task.zones; });
     try {
       await controllerRequest(`/tasks/delete?id=${encodeURIComponent(parsed.id)}`, { method: "DELETE" }, true);
+      await options.afterControllerContact?.({ repository, type: "task-delete", requestId: parsed.requestId });
       const operation = await repository.mutate((data) => {
         const currentOperation = data.operations[parsed.requestId];
         currentOperation.state = "completed";
+        currentOperation.zones = task.zones;
         currentOperation.updatedAt = Date.now();
         addHistory(data, task.zones, "Stopped", "Remote", undefined, currentOperation.id);
         return currentOperation;
       });
       res.status(201).json(operationPublic(operation));
     } catch (error) {
+      if (error?.code === "REPOSITORY_OVERLOADED") {
+        return res.status(202).json(operationPublic(claim.operation));
+      }
       const state = error instanceof ControllerRejectedError ? "rejected" : "outcome_unknown";
-      const operation = await repository.mutate((data) => {
-        const currentOperation = data.operations[parsed.requestId];
-        currentOperation.state = state;
-        currentOperation.updatedAt = Date.now();
-        if (state === "outcome_unknown") addHistory(data, task.zones, "Outcome unknown", "Remote", undefined, currentOperation.id);
-        return currentOperation;
-      });
+      let operation;
+      try {
+        operation = await repository.mutate((data) => {
+          const currentOperation = data.operations[parsed.requestId];
+          currentOperation.state = state;
+          currentOperation.zones = task.zones;
+          currentOperation.updatedAt = Date.now();
+          if (state === "outcome_unknown") addHistory(data, task.zones, "Outcome unknown", "Remote", undefined, currentOperation.id);
+          return currentOperation;
+        });
+      } catch (persistenceError) {
+        if (persistenceError?.code === "REPOSITORY_OVERLOADED") return res.status(202).json(operationPublic(claim.operation));
+        throw persistenceError;
+      }
       res.status(state === "rejected" ? 502 : 202).json(operationPublic(operation));
     }
   }));
@@ -492,7 +514,12 @@ export async function createApp(options = {}) {
     if (err instanceof AmbiguousControllerError) return res.status(503).json({ error: "controller outcome unknown", recovery: "Check controller status before retrying." });
     if (err?.code === "REPOSITORY_OVERLOADED") {
       res.set("Retry-After", "1");
-      return res.status(503).json({ error: "datastore busy", recovery: "Retry this same requestId after the indicated delay." });
+      return res.status(503).json({
+        error: "datastore busy",
+        outcome: "not_applied",
+        requestId: typeof req.body?.requestId === "string" ? req.body.requestId : undefined,
+        recovery: "Not applied. Retry this same requestId after the indicated delay.",
+      });
     }
     console.error(err.stack ?? err);
     res.status(500).json({ error: "internal error" });

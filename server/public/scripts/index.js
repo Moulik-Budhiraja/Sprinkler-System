@@ -11,6 +11,11 @@ let field;
 let refreshInFlight = false;
 let pollTimer;
 const deleteRequestIds = new Map();
+const manualMutationStore = window.MutationRecovery.storage("manual-start");
+let pendingManualMutation = manualMutationStore.load();
+let quickTaskConflict = false;
+let quickTaskRetryWaiting = false;
+const stopConflicts = new Set();
 
 const $ = (selector) => document.querySelector(selector);
 const node = (tag, className, text) => {
@@ -75,26 +80,109 @@ function updateQuickTaskSubmit() {
   const submit = document.querySelector("#quickTaskForm [type=submit]");
   if (!submit) return;
   const validZones = [...selectedZones].every((zone) => Number.isInteger(zone) && zone >= 1 && zone <= VISIBLE_ZONE_COUNT);
-  submit.disabled = !selectedZones.size || !validZones || !quickTaskControllerAvailable || quickTaskAmbiguous;
+  submit.disabled = !selectedZones.size || !validZones || !quickTaskControllerAvailable || quickTaskAmbiguous || quickTaskConflict || quickTaskRetryWaiting;
+}
+
+function lockQuickTask(locked) {
+  document.querySelectorAll("#quickTaskForm .qt-zone, #quickTaskForm .qt-duration").forEach((control) => { control.disabled = locked; });
+}
+
+function allowManualRetry(seconds = 0) {
+  quickTaskAmbiguous = false;
+  quickTaskRetryWaiting = seconds > 0;
+  lockQuickTask(true);
+  const enable = () => { quickTaskRetryWaiting = false; $("#quickMessage").textContent = "Datastore busy · not applied. Retry only this same request."; updateQuickTaskSubmit(); };
+  if (seconds > 0) setTimeout(enable, seconds * 1000); else enable();
+}
+
+async function reconcileManualMutation() {
+  quickTaskAmbiguous = true;
+  lockQuickTask(true);
+  updateQuickTaskSubmit();
+  const message = $("#quickMessage");
+  message.textContent = "Outcome unknown · checking the durable operation. No new request will be sent.";
+  const result = await window.MutationRecovery.reconcile(pendingManualMutation.requestId);
+  if (result.kind === "committed") {
+    manualMutationStore.clear();
+    pendingManualMutation = null;
+    selectedZones.clear();
+    lockQuickTask(false);
+    quickTaskAmbiguous = false;
+    message.textContent = "Task added";
+    await refreshTasks();
+  } else if (result.kind === "rejected") {
+    manualMutationStore.clear();
+    pendingManualMutation = null;
+    quickTaskAmbiguous = false;
+    quickTaskConflict = true;
+    lockQuickTask(false);
+    message.textContent = "Start rejected · task unchanged. Refresh status or edit before a deliberate new Start.";
+    updateQuickTaskSubmit();
+  } else if (result.kind === "not_found" || result.kind === "not_applied") {
+    allowManualRetry();
+  } else {
+    message.textContent = "Outcome unknown · check Status. This request will not be sent again.";
+  }
 }
 
 async function stopTask(task) {
-  const id = requestId("stop");
-  try {
-    const result = await request("/api/tasks/delete", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: String(task.id), requestId: id }),
-    });
-    if (result.outcome === "unknown") {
-      setControllerStatus("stale");
-      field?.update({ tasks: currentTasks, stale: true });
-      return;
-    }
+  if (stopConflicts.has(String(task.id))) {
+    $("#fieldMutationFeedback").textContent = "Stop conflict · controller refresh required before a deliberate new Stop.";
+    field?.clearPendingTask(task.id);
+    return;
+  }
+  const store = window.MutationRecovery.storage(`task-delete.${String(task.id)}`);
+  let pending = store.load();
+  if (!pending) pending = store.save({ requestId: requestId("stop"), payload: { id: String(task.id) } });
+  const feedback = $("#fieldMutationFeedback");
+  if (Number.isFinite(pending.retryAt) && pending.retryAt > Date.now()) {
+    feedback.textContent = `Datastore busy · wait ${Math.ceil((pending.retryAt - Date.now()) / 1000)} second before retrying this same Stop.`;
+    return;
+  }
+  feedback.textContent = "Stopping";
+  const result = await window.MutationRecovery.send("/api/tasks/delete", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...pending.payload, requestId: pending.requestId }),
+  });
+  if (result.kind === "committed") {
+    stopConflicts.delete(String(task.id));
+    store.clear();
+    feedback.textContent = "Task stopped";
     await Promise.all([refreshTasks(), refreshHistory()]);
-  } catch {
-    setControllerStatus("stale");
-    field?.update({ tasks: currentTasks, stale: true });
+  } else if (result.kind === "not_applied") {
+    pending.retryAt = Date.now() + result.retryAfter * 1000;
+    store.save(pending);
+    feedback.textContent = `Datastore busy · Stop was not applied. Retry this same Stop in ${result.retryAfter} second${result.retryAfter === 1 ? "" : "s"}.`;
+    field?.clearPendingTask(task.id);
+  } else if (result.kind === "conflict") {
+    store.clear();
+    stopConflicts.add(String(task.id));
+    feedback.textContent = "Stop conflict · task unchanged. Refresh status before a deliberate new Stop.";
+    field?.clearPendingTask(task.id);
+  } else if (result.kind === "outcome_unknown" || result.kind === "network_ambiguous") {
+    feedback.textContent = "Stop outcome unknown · reconciling. No new Stop will be sent.";
+    const reconciled = await window.MutationRecovery.reconcile(pending.requestId);
+    if (reconciled.kind === "committed") {
+      store.clear();
+      feedback.textContent = "Task stopped";
+      await Promise.all([refreshTasks(), refreshHistory()]);
+    } else if (reconciled.kind === "rejected") {
+      store.clear();
+      stopConflicts.add(String(task.id));
+      feedback.textContent = "Stop rejected · task unchanged. Refresh status before a deliberate new Stop.";
+      field?.clearPendingTask(task.id);
+    } else if (reconciled.kind === "not_found" || reconciled.kind === "not_applied") {
+      feedback.textContent = "Stop not committed · retry only this same Stop.";
+      field?.clearPendingTask(task.id);
+    } else {
+      feedback.textContent = "Stop outcome unknown · check the visible task state. No new Stop will be sent.";
+      field?.clearPendingTask(task.id);
+    }
+  } else {
+    store.clear();
+    feedback.textContent = `Stop failed · ${result.data.error || "request rejected"}. Task unchanged.`;
+    field?.clearPendingTask(task.id);
   }
 }
 
@@ -104,6 +192,7 @@ async function refreshTasks() {
   try {
     const data = await request("/api/tasks");
     currentTasks = Array.isArray(data.tasks) ? data.tasks : [];
+    stopConflicts.clear();
     startingZones = [];
     quickTaskControllerAvailable = true;
     setControllerStatus("online");
@@ -138,6 +227,7 @@ function setupQuickTask() {
     button.setAttribute("aria-label", `Zone ${zone}`);
     button.setAttribute("aria-pressed", "false");
     button.addEventListener("click", () => {
+      quickTaskConflict = false;
       selectedZones.has(zone) ? selectedZones.delete(zone) : selectedZones.add(zone);
       button.setAttribute("aria-pressed", String(selectedZones.has(zone)));
       updateQuickTaskSubmit();
@@ -150,8 +240,10 @@ function setupQuickTask() {
     button.setAttribute("aria-label", `${minutes} minutes`);
     button.setAttribute("aria-pressed", String(minutes === selectedDuration));
     button.addEventListener("click", () => {
+      quickTaskConflict = false;
       selectedDuration = minutes;
       durations.querySelectorAll("button").forEach((item) => item.setAttribute("aria-pressed", String(item === button)));
+      updateQuickTaskSubmit();
     });
     durations.append(button);
   }
@@ -160,37 +252,67 @@ function setupQuickTask() {
     const message = $("#quickMessage");
     if (!selectedZones.size || submit.disabled) { message.textContent = window.QuickTaskContract.precondition; return; }
     submit.disabled = true;
-    let keepDisabled = false;
     message.textContent = "Starting";
-    startingZones = [...selectedZones];
-    field?.update({ tasks: currentTasks, startingZones });
-    try {
-      const result = await request("/api/tasks/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ requestId: requestId("manual"), zones: [...selectedZones], runTime: selectedDuration }),
+    if (!pendingManualMutation) {
+      pendingManualMutation = manualMutationStore.save({
+        requestId: requestId("manual"),
+        payload: { zones: [...selectedZones], runTime: selectedDuration },
       });
-      if (result.outcome === "unknown") {
-        quickTaskAmbiguous = true;
-        keepDisabled = true;
-        startingZones = [];
-        field?.update({ tasks: currentTasks, stale: true });
-        message.textContent = "Outcome unknown · check Status before taking another action";
-        setControllerStatus("stale");
-      } else {
-        selectedZones.clear();
-        zones.querySelectorAll("button").forEach((button) => button.setAttribute("aria-pressed", "false"));
-        message.textContent = "Task added";
-        await refreshTasks();
-      }
-    } catch {
+    }
+    lockQuickTask(true);
+    startingZones = [...pendingManualMutation.payload.zones];
+    field?.update({ tasks: currentTasks, startingZones });
+    const result = await window.MutationRecovery.send("/api/tasks/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ requestId: pendingManualMutation.requestId, ...pendingManualMutation.payload }),
+    });
+    startingZones = [];
+    field?.update({ tasks: currentTasks, startingZones, stale: false });
+    if (result.kind === "committed") {
+      manualMutationStore.clear();
+      pendingManualMutation = null;
+      selectedZones.clear();
+      lockQuickTask(false);
+      zones.querySelectorAll("button").forEach((button) => button.setAttribute("aria-pressed", "false"));
+      message.textContent = "Task added";
+      await refreshTasks();
+    } else if (result.kind === "not_applied") {
+      pendingManualMutation.retryAt = Date.now() + result.retryAfter * 1000;
+      manualMutationStore.save(pendingManualMutation);
+      message.textContent = `Datastore busy · not applied. Retry this same request in ${result.retryAfter} second${result.retryAfter === 1 ? "" : "s"}.`;
+      allowManualRetry(result.retryAfter);
+    } else if (result.kind === "conflict") {
+      manualMutationStore.clear();
+      pendingManualMutation = null;
+      quickTaskAmbiguous = false;
+      quickTaskConflict = true;
+      lockQuickTask(false);
+      message.textContent = `Request conflict · ${result.data.error}. Refresh status or edit the task before starting again.`;
+    } else if (result.kind === "outcome_unknown" || result.kind === "network_ambiguous") {
       quickTaskAmbiguous = true;
-      keepDisabled = true;
-      startingZones = [];
-      field?.update({ tasks: currentTasks, stale: true });
-      message.textContent = "Could not confirm task · check Status before taking another action";
-    } finally { submit.disabled = keepDisabled; updateQuickTaskSubmit(); }
+      message.textContent = "Outcome unknown · reconciling the durable operation. No new request will be sent.";
+      await reconcileManualMutation();
+    } else {
+      manualMutationStore.clear();
+      pendingManualMutation = null;
+      quickTaskAmbiguous = false;
+      lockQuickTask(false);
+      message.textContent = `Start failed · ${result.data.error || "request rejected"}`;
+    }
+    updateQuickTaskSubmit();
   });
+
+  if (pendingManualMutation) {
+    selectedZones.clear();
+    pendingManualMutation.payload.zones.forEach((zone) => selectedZones.add(zone));
+    selectedDuration = pendingManualMutation.payload.runTime;
+    zones.querySelectorAll("button").forEach((button, index) => button.setAttribute("aria-pressed", String(selectedZones.has(index + 1))));
+    durations.querySelectorAll("button").forEach((button) => button.setAttribute("aria-pressed", String(Number.parseInt(button.textContent, 10) === selectedDuration)));
+    lockQuickTask(true);
+    if (Number.isFinite(pendingManualMutation.retryAt)) allowManualRetry(Math.max(0, (pendingManualMutation.retryAt - Date.now()) / 1000));
+    else void reconcileManualMutation();
+  }
 }
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -310,7 +432,10 @@ document.addEventListener("DOMContentLoaded", () => {
   if (field) {
     refreshTasks();
     schedulePoll();
-    $("#refreshController")?.addEventListener("click", refreshTasks);
+    $("#refreshController")?.addEventListener("click", () => {
+      quickTaskConflict = false;
+      refreshTasks();
+    });
     window.addEventListener("focus", refreshTasks);
     document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshTasks(); });
   }

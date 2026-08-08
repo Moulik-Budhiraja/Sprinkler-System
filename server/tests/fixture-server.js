@@ -27,6 +27,7 @@ await fs.writeFile(dataPath, JSON.stringify({ schedules, history, operations: {}
 
 let mode = "online";
 let nextId = 1;
+let adds = 0;
 const initialTasks = [
   { id: "running", zones: [4], runTime: 20, startTime: now - 240 },
   { id: "queued", zones: [6], runTime: 10, startTime: 0 },
@@ -37,6 +38,7 @@ const controllerFetch = async (url, init = {}) => {
   const parsed = new URL(url);
   if (parsed.pathname === "/tasks" && !init.method) return Response.json({ tasks });
   if (parsed.pathname === "/tasks/add") {
+    adds += 1;
     const body = JSON.parse(init.body);
     tasks.push(...body.tasks.map((task) => ({ id: `browser-${nextId++}`, ...task, startTime: 0 })));
     if (mode === "lost-response") return new Response("lost", { status: 200 });
@@ -51,21 +53,43 @@ const controllerFetch = async (url, init = {}) => {
   return Response.json({ error: "not found" }, { status: 404 });
 };
 
-const instance = await createApp({ dataPath, controllerFetch, controllerTimeoutMs: 250 });
+const instance = await createApp({
+  dataPath,
+  controllerFetch,
+  controllerTimeoutMs: 250,
+  repositoryOptions: { maxPendingWrites: 1 },
+  afterControllerContact({ repository, type }) {
+    if (mode !== "post-controller-overload" || type !== "manual-start") return;
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    void repository.mutate(async () => { await gate; }).catch(() => {});
+    setTimeout(release, 50);
+  },
+});
 instance.app.post("/__test/controller", (req, res) => {
   mode = req.body?.mode ?? mode;
   if (Array.isArray(req.body?.tasks)) tasks = req.body.tasks;
   res.json({ mode, tasks });
 });
+instance.app.get("/__test/state", (req, res) => res.json({ mode, tasks, adds }));
 instance.app.post("/__test/reset", async (req, res) => {
   mode = "online";
   nextId = 1;
+  adds = 0;
   tasks = structuredClone(initialTasks);
-  await instance.repository.mutate((data) => {
-    data.schedules = structuredClone(seed.schedules);
-    data.history = structuredClone(seed.history);
-    data.operations = {};
-  });
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await instance.repository.mutate((data) => {
+        data.schedules = structuredClone(seed.schedules);
+        data.history = structuredClone(seed.history);
+        data.operations = {};
+      });
+      break;
+    } catch (error) {
+      if (error.code !== "REPOSITORY_OVERLOADED" || attempt >= 20) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
   res.json({ reset: true });
 });
 const server = instance.app.listen(4178, "127.0.0.1", () => console.log("production createApp fixture http://127.0.0.1:4178"));

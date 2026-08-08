@@ -417,6 +417,15 @@
       applyState();
     }
 
+    function clearPendingTask(taskId) {
+      for (const [z, s] of state.zones) {
+        if (s.status === "stopping" && s.task?.id === taskId) {
+          state.zones.set(z, { ...s, status: s.task.startTime && s.task.startTime !== 0 ? "active" : "queued" });
+        }
+      }
+      applyState();
+    }
+
     function applyState() {
       container.classList.toggle("offline", state.offline);
       for (const entry of state.layout.zones) {
@@ -519,7 +528,7 @@
     });
 
     build();
-    return { update, clearSelection, get layoutName() { return mqDesktop.matches ? "desktop" : "mobile"; } };
+    return { update, clearSelection, clearPendingTask, get layoutName() { return mqDesktop.matches ? "desktop" : "mobile"; } };
   }
 
   window.LivingYard = {
