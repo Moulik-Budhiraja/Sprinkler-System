@@ -28,6 +28,7 @@ await fs.writeFile(dataPath, JSON.stringify({ schedules, history, operations: {}
 let mode = "online";
 let nextId = 1;
 let adds = 0;
+let releaseReadOverload = null;
 const initialTasks = [
   { id: "running", zones: [4], runTime: 20, startTime: now - 240 },
   { id: "queued", zones: [6], runTime: 10, startTime: 0 },
@@ -39,6 +40,9 @@ const controllerFetch = async (url, init = {}) => {
   if (parsed.pathname === "/tasks" && !init.method) return Response.json({ tasks });
   if (parsed.pathname === "/tasks/add") {
     adds += 1;
+    if (mode === "read-overload") {
+      return new Promise((resolve) => { releaseReadOverload = () => resolve(Response.json({ success: true })); });
+    }
     const body = JSON.parse(init.body);
     tasks.push(...body.tasks.map((task) => ({ id: `browser-${nextId++}`, ...task, startTime: 0 })));
     if (mode === "lost-response") return new Response("lost", { status: 200 });
@@ -55,8 +59,10 @@ const controllerFetch = async (url, init = {}) => {
 
 const instance = await createApp({
   dataPath,
+  publicOrigin: "http://127.0.0.1:4178",
   controllerFetch,
   controllerTimeoutMs: 250,
+  controllerMaxConcurrent: 1,
   repositoryOptions: { maxPendingWrites: 1 },
   afterControllerContact({ repository, type }) {
     if (mode !== "post-controller-overload" || type !== "manual-start") return;
@@ -68,14 +74,24 @@ const instance = await createApp({
 });
 instance.app.post("/__test/controller", (req, res) => {
   mode = req.body?.mode ?? mode;
+  if (req.body?.release && releaseReadOverload) {
+    const release = releaseReadOverload;
+    releaseReadOverload = null;
+    release();
+  }
   if (Array.isArray(req.body?.tasks)) tasks = req.body.tasks;
   res.json({ mode, tasks });
 });
-instance.app.get("/__test/state", (req, res) => res.json({ mode, tasks, adds }));
+instance.app.get("/__test/state", (req, res) => res.json({ mode, tasks, adds, controllerWork: instance.controllerWorkState() }));
 instance.app.post("/__test/reset", async (req, res) => {
   mode = "online";
   nextId = 1;
   adds = 0;
+  if (releaseReadOverload) {
+    const release = releaseReadOverload;
+    releaseReadOverload = null;
+    release();
+  }
   tasks = structuredClone(initialTasks);
   for (let attempt = 0; ; attempt += 1) {
     try {

@@ -70,11 +70,11 @@ function setControllerStatus(state) {
   const status = $("#mobileControllerStatus");
   const wrap = status?.closest(".controller-status");
   const freshness = $("[data-testid=controller-freshness]");
-  if (status) status.textContent = state === "online" ? "Controller online" : state === "stale" ? "Controller offline · last known state" : "Controller offline";
-  wrap?.classList.toggle("offline", state !== "online");
+  if (status) status.textContent = state === "online" ? "Controller online" : state === "busy" ? "Controller busy · try again shortly" : state === "stale" ? "Controller offline · last known state" : "Controller offline";
+  wrap?.classList.toggle("offline", state !== "online" && state !== "busy");
   if (freshness) {
-    freshness.dataset.state = state === "online" ? "live" : "stale";
-    freshness.textContent = state === "online" ? "Controller status current" : "Controller offline · showing stale last-known state";
+    freshness.dataset.state = state === "online" ? "live" : state === "busy" ? "busy" : "stale";
+    freshness.textContent = state === "online" ? "Controller status current" : state === "busy" ? "Controller busy · try again shortly" : "Controller offline · showing stale last-known state";
   }
 }
 
@@ -323,10 +323,11 @@ async function refreshTasks() {
     quickTaskControllerAvailable = true;
     setControllerStatus("online");
     field.update({ tasks: currentTasks, startingZones, stale: false });
-  } catch {
+  } catch (error) {
     quickTaskControllerAvailable = false;
-    setControllerStatus(currentTasks.length ? "stale" : "offline");
-    field.update({ tasks: currentTasks, startingZones, stale: true });
+    const busy = error?.data?.kind === "read_overload";
+    setControllerStatus(busy ? "busy" : currentTasks.length ? "stale" : "offline");
+    field.update({ tasks: currentTasks, startingZones, stale: !busy });
   } finally {
     updateQuickTaskSubmit();
     refreshInFlight = false;

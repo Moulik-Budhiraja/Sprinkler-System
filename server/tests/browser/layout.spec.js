@@ -1,9 +1,5 @@
 import { expect, test } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import fs from "node:fs/promises";
-import path from "node:path";
-
-const shots = path.resolve("../screenshots/v4-local");
 
 function watchRuntime(page) {
   const problems = [];
@@ -45,8 +41,26 @@ function separate(a, b, label) {
   expect(overlap, label).toBe(false);
 }
 
+for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+  test(`keyboard skip link is visible, unclipped and at least 44x44 at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.goto("/");
+    await page.keyboard.press("Tab");
+    const skip = page.getByRole("link", { name: "Skip to main content" });
+    await expect(skip).toBeFocused();
+    const rect = await skip.boundingBox();
+    expect(rect.width).toBeGreaterThanOrEqual(44);
+    expect(rect.height).toBeGreaterThanOrEqual(44);
+    expect(rect.x).toBeGreaterThanOrEqual(0);
+    expect(rect.y).toBeGreaterThanOrEqual(0);
+    expect(rect.x + rect.width).toBeLessThanOrEqual(viewport.width);
+    expect(rect.y + rect.height).toBeLessThanOrEqual(viewport.height);
+    await expect(skip).toHaveCSS("outline-style", "solid");
+  });
+}
+
 for (const viewport of [{ width: 390, height: 844 }, { width: 390, height: 1067 }]) {
-  test(`mobile header and Quick Task copy are intact at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+  test(`mobile header and Quick Task copy are intact at ${viewport.width}x${viewport.height}`, async ({ page }, testInfo) => {
     const problems = watchRuntime(page);
     await page.setViewportSize(viewport);
     await page.goto("/");
@@ -69,12 +83,11 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 390, height: 1067 
     await expect(page.locator("[data-testid=field] .field-status-copy, [data-testid=field] time")).toHaveCount(0);
     await expect(page.locator("[data-testid=field-zone]")).toHaveCount(6);
     expect(problems).toEqual([]);
-    await fs.mkdir(shots, { recursive: true });
-    await page.screenshot({ path: path.join(shots, `mobile-${viewport.height}-copy.png`), fullPage: true });
+    await page.screenshot({ path: testInfo.outputPath(`mobile-${viewport.height}-copy.png`), fullPage: true });
   });
 }
 
-test("desktop sidebar branding is complete and separated at 1440x900", async ({ page }) => {
+test("desktop sidebar branding is complete and separated at 1440x900", async ({ page }, testInfo) => {
   const problems = watchRuntime(page);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
@@ -92,8 +105,7 @@ test("desktop sidebar branding is complete and separated at 1440x900", async ({ 
   separate(brand, today, "brand overlaps Today navigation");
   await expect(page.getByText(/D01\s*[—-]\s*Dashboard/i)).toHaveCount(0);
   expect(problems).toEqual([]);
-  await fs.mkdir(shots, { recursive: true });
-  await page.screenshot({ path: path.join(shots, "desktop-1440-copy.png"), fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath("desktop-1440-copy.png"), fullPage: true });
 });
 
 test("dashboard order, field geometry, interactions and accessibility", async ({ page }) => {

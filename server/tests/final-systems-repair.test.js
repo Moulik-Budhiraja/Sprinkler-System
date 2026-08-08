@@ -58,7 +58,7 @@ test("controller deadline causally aborts 50 cooperative mutations and drains ev
   try {
     const responses = await Promise.all(Array.from({ length: 50 }, (_, index) => fetch(`${origin}/api/tasks/create`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Origin: origin },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(manual(`abort-probe-${String(index).padStart(4, "0")}`)),
     })));
     assert.deepEqual([...new Set(responses.map(({ status }) => status))], [202]);
@@ -89,7 +89,7 @@ test("late resolve and reject after abort cannot complete durable mutations or c
     for (const id of ["late-resolve-0001", "late-reject-0002"]) {
       const response = await fetch(`${origin}/api/tasks/create`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Origin: origin },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(manual(id)),
       });
       assert.equal(response.status, 202);
@@ -125,13 +125,13 @@ test("ignored abort retains bounded admission and reports definitive pre-contact
   try {
     const first = await Promise.all([0, 1].map((index) => fetch(`${origin}/api/tasks/create`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Origin: origin },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(manual(`ignored-abort-${index}-0001`)),
     })));
     assert.deepEqual(first.map(({ status }) => status), [202, 202]);
     const overloaded = await Promise.all(Array.from({ length: 12 }, (_, index) => fetch(`${origin}/api/tasks/create`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Origin: origin },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(manual(`saturated-${String(index).padStart(4, "0")}`)),
     })));
     assert.ok(overloaded.every(({ status }) => status === 503));
@@ -154,7 +154,11 @@ test("cleanup aborts and drains owned cooperative calls while preserving exactly
   const state = { calls: 0, active: 0, signals: 0, aborts: 0 };
   const dataPath = await tempDataPath();
   const instance = await createApp({ dataPath, controllerFetch: cooperativeStall(state), controllerTimeoutMs: 1000 });
-  const pending = request(instance.app).post("/api/tasks/create").send(manual("shutdown-abort-0001")).then((response) => response);
+  const live = await listen(instance.app);
+  const pending = fetch(`${live.origin}/api/tasks/create`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(manual("shutdown-abort-0001")),
+  });
   while (state.active === 0) await new Promise((resolve) => setTimeout(resolve, 1));
   await instance.cleanup();
   const response = await pending;
@@ -162,9 +166,15 @@ test("cleanup aborts and drains owned cooperative calls while preserving exactly
   assert.equal(state.aborts, 1);
   assert.equal(state.active, 0);
   assert.deepEqual(instance.controllerWorkState(), { activeCalls: 0, admitted: 0, shuttingDown: true });
+  await close(live.server);
   const replayInstance = await createApp({ dataPath, controllerFetch: async () => { state.calls += 1; return Response.json({ success: true }); } });
-  await request(replayInstance.app).post("/api/tasks/create").send(manual("shutdown-abort-0001")).expect(202);
+  const replayLive = await listen(replayInstance.app);
+  assert.equal((await fetch(`${replayLive.origin}/api/tasks/create`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(manual("shutdown-abort-0001")),
+  })).status, 202);
   assert.equal(state.calls, 1, "reconciliation must not resend after shutdown ambiguity");
+  await close(replayLive.server);
   await replayInstance.cleanup();
 });
 
@@ -184,13 +194,18 @@ test("native HTTP controller fetch receives deadline cancellation and closes its
     controllerHost: `http://127.0.0.1:${controller.address().port}`,
     controllerTimeoutMs: 20,
   });
+  const live = await listen(instance.app);
   try {
-    const pending = request(instance.app).post("/api/tasks/create").send(manual("native-fetch-abort-0001")).then((response) => response);
+    const pending = fetch(`${live.origin}/api/tasks/create`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(manual("native-fetch-abort-0001")),
+    });
     await contacted;
     assert.equal((await pending).status, 202);
     await Promise.race([disconnected, new Promise((_, reject) => setTimeout(() => reject(new Error("controller socket did not close")), 500))]);
     assert.deepEqual(instance.controllerWorkState(), { activeCalls: 0, admitted: 0, shuttingDown: false });
   } finally {
+    await close(live.server);
     await instance.cleanup();
     await close(controller);
   }
@@ -227,12 +242,20 @@ test("Stop and scheduler controller mutations both receive abort and preserve un
 
   const stopPath = await tempDataPath();
   const stop = await createApp({ dataPath: stopPath, controllerFetch, controllerTimeoutMs: 10 });
+  const stopLive = await listen(stop.app);
   const stopBody = { id: "abort-stop-task", requestId: "abort-stop-operation-0001" };
-  await request(stop.app).delete("/api/tasks/delete").send(stopBody).expect(202);
-  await request(stop.app).delete("/api/tasks/delete").send(stopBody).expect(202);
-  assert.equal(deletes, 1);
-  assert.equal(JSON.parse(await fs.readFile(stopPath, "utf8")).operations[stopBody.requestId].state, "outcome_unknown");
-  await stop.cleanup();
+  try {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      assert.equal((await fetch(`${stopLive.origin}/api/tasks/delete`, {
+        method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify(stopBody),
+      })).status, 202);
+    }
+    assert.equal(deletes, 1);
+    assert.equal(JSON.parse(await fs.readFile(stopPath, "utf8")).operations[stopBody.requestId].state, "outcome_unknown");
+  } finally {
+    await close(stopLive.server);
+    await stop.cleanup();
+  }
 
   const now = new Date(2026, 7, 8, 6, 30, 5);
   const schedulePath = await tempDataPath({
@@ -269,7 +292,7 @@ const mutationRoutes = [
 ];
 
 test("every mutation route rejects malformed, null, scheme, port and cross-host origins", async () => {
-  const instance = await createApp({ dataPath: await tempDataPath(), demo: true });
+  const instance = await createApp({ dataPath: await tempDataPath(), demo: true, allowSyntheticTestOrigin: true });
   const { server, origin } = await listen(instance.app);
   const port = new URL(origin).port;
   try {
@@ -292,7 +315,7 @@ test("every mutation route rejects malformed, null, scheme, port and cross-host 
 });
 
 test("direct same-origin and absent Origin remain allowed without trusting forwarded scheme", async () => {
-  const instance = await createApp({ dataPath: await tempDataPath(), demo: true });
+  const instance = await createApp({ dataPath: await tempDataPath(), demo: true, allowSyntheticTestOrigin: true });
   const { server, origin } = await listen(instance.app);
   try {
     await request(origin).post("/api/tasks/create").set("Origin", origin).send(manual("same-origin-allowed-0001")).expect(201);
@@ -310,13 +333,17 @@ test("direct same-origin and absent Origin remain allowed without trusting forwa
 
 test("configured public origins normalize case, default ports and IPv6 while remaining independent of Host", async () => {
   const configured = await createApp({ dataPath: await tempDataPath(), demo: true, publicOrigin: "HTTPS://Example.COM:443" });
-  await request(configured.app).post("/api/zones").set("Host", "attacker.invalid").set("Origin", "https://example.com").send({ zone: 1, on: true }).expect(409);
-  await request(configured.app).post("/api/zones").set("Origin", "https://example.com:444").send({}).expect(403);
-  await request(configured.app).post("/api/zones").set("Origin", "http://example.com").send({}).expect(403);
+  const configuredLive = await listen(configured.app);
+  await request(configuredLive.origin).post("/api/zones").set("Host", "attacker.invalid").set("Origin", "https://example.com").send({ zone: 1, on: true }).expect(409);
+  await request(configuredLive.origin).post("/api/zones").set("Origin", "https://example.com:444").send({}).expect(403);
+  await request(configuredLive.origin).post("/api/zones").set("Origin", "http://example.com").send({}).expect(403);
+  await close(configuredLive.server);
   await configured.cleanup();
 
   const ipv6 = await createApp({ dataPath: await tempDataPath(), demo: true, publicOrigin: "https://[::1]:443" });
-  await request(ipv6.app).post("/api/zones").set("Origin", "https://[::1]").send({ zone: 1, on: true }).expect(409);
-  await request(ipv6.app).post("/api/zones").set("Origin", "https://[::1]:444").send({}).expect(403);
+  const ipv6Live = await listen(ipv6.app);
+  await request(ipv6Live.origin).post("/api/zones").set("Origin", "https://[::1]").send({ zone: 1, on: true }).expect(409);
+  await request(ipv6Live.origin).post("/api/zones").set("Origin", "https://[::1]:444").send({}).expect(403);
+  await close(ipv6Live.server);
   await ipv6.cleanup();
 });

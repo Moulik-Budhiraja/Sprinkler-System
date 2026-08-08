@@ -35,13 +35,40 @@ class ControllerCapacityError extends ControllerError {
   }
 }
 
-function normalizedPublicOrigin(value) {
-  const parsed = new URL(value);
+function normalizedPublicOrigin(value, label = "publicOrigin") {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${label} must be an explicit HTTP(S) origin`);
+  }
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${label} must be a valid HTTP(S) origin`);
+  }
   if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password ||
       parsed.pathname !== "/" || parsed.search || parsed.hash) {
-    throw new Error("publicOrigin must be an HTTP(S) origin without credentials, path, query, or fragment");
+    throw new Error(`${label} must be an HTTP(S) origin without credentials, path, query, or fragment`);
   }
   return parsed.origin;
+}
+
+export function resolveStartupConfig(env = process.env) {
+  if (env.SPRINKLER_DEMO !== "0" && env.SPRINKLER_DEMO !== "1") {
+    throw new Error("SPRINKLER_DEMO must be explicitly set to exactly 0 or 1");
+  }
+  const demo = env.SPRINKLER_DEMO === "1";
+  const testOrigin = env.SPRINKLER_TEST_ORIGIN;
+  if (testOrigin !== undefined && testOrigin !== "0" && testOrigin !== "1") {
+    throw new Error("SPRINKLER_TEST_ORIGIN must be exactly 0 or 1 when set");
+  }
+  if (testOrigin === "1") {
+    if (!demo) throw new Error("SPRINKLER_TEST_ORIGIN is allowed only for a synthetic demo");
+    return { demo: true, publicOrigin: null, allowSyntheticTestOrigin: true };
+  }
+  return {
+    demo,
+    publicOrigin: normalizedPublicOrigin(env.SPRINKLER_PUBLIC_ORIGIN, "SPRINKLER_PUBLIC_ORIGIN"),
+  };
 }
 
 export function createSyntheticController(now = () => Math.floor(Date.now() / 1000)) {
@@ -142,6 +169,8 @@ export async function createApp(options = {}) {
   }
   const configuredPublicOrigin = options.publicOrigin ?? process.env.SPRINKLER_PUBLIC_ORIGIN;
   const publicOrigin = configuredPublicOrigin ? normalizedPublicOrigin(configuredPublicOrigin) : null;
+  const allowSyntheticTestOrigin = options.allowSyntheticTestOrigin === true;
+  if (allowSyntheticTestOrigin && !demo) throw new Error("test origin mode is allowed only for a synthetic demo");
   const controllerLeases = new Set();
   let controllerShuttingDown = false;
 
@@ -263,9 +292,12 @@ export async function createApp(options = {}) {
     const origin = req.get("Origin");
     if (origin) {
       try {
-        const requestOrigin = new URL(origin).origin;
+        const requestOrigin = normalizedPublicOrigin(origin, "request Origin");
         const directScheme = req.socket.encrypted ? "https" : "http";
-        const expectedOrigin = publicOrigin ?? normalizedPublicOrigin(`${directScheme}://${req.get("Host")}`);
+        const expectedOrigin = publicOrigin ?? (allowSyntheticTestOrigin
+          ? normalizedPublicOrigin(`${directScheme}://${req.get("Host")}`, "synthetic test origin")
+          : null);
+        if (!expectedOrigin) return res.status(403).json({ error: "origin denied" });
         if (requestOrigin !== expectedOrigin) return res.status(403).json({ error: "origin denied" });
       } catch {
         return res.status(403).json({ error: "origin denied" });
@@ -367,7 +399,19 @@ export async function createApp(options = {}) {
     res.status(201).json(entry);
   }));
 
-  app.get("/api/tasks", wrap(async (req, res) => res.json(await controllerRequest("/tasks"))));
+  app.get("/api/tasks", wrap(async (req, res) => {
+    try {
+      return res.json(await controllerRequest("/tasks"));
+    } catch (error) {
+      if (error?.code !== "CONTROLLER_OVERLOADED") throw error;
+      res.set("Retry-After", "1");
+      return res.status(503).json({
+        error: "controller busy",
+        kind: "read_overload",
+        recovery: "Try again shortly.",
+      });
+    }
+  }));
 
   app.get("/api/operations/:id", wrap(async (req, res) => {
     const id = safeId(req.params.id);
@@ -699,7 +743,8 @@ const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve
 if (isMain) {
   const port = Number(process.env.PORT || 5000);
   const host = process.env.HOST || "127.0.0.1";
-  const instance = await createApp();
+  const startup = resolveStartupConfig();
+  const instance = await createApp(startup);
   if (!instance.demo) instance.startBackgroundJobs();
   const server = instance.app.listen(port, host, () => {
     console.log(`Sprinkler Webserver listening on http://${host}:${port}${instance.demo ? " (demo mode)" : ""}`);

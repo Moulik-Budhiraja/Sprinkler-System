@@ -637,7 +637,7 @@ test("demo instances own unique private stores, recover missing files and clean 
 
 test("same-origin policy rejects cross-site mutations and security/cache headers are explicit", async () => {
   const dataPath = await tempDataPath();
-  const { app } = await createApp({ dataPath, controllerFetch: successfulController().fetch });
+  const { app } = await createApp({ dataPath, controllerFetch: successfulController().fetch, publicOrigin: "http://yard.local" });
   await withBoundServer(app, async (client) => {
     await client.post("/api/schedules/create").set("Origin", "https://evil.invalid").set("Host", "yard.local").send(scheduleCreate()).expect(403);
     await client.post("/api/schedules/create").set("Sec-Fetch-Site", "cross-site").send(scheduleCreate()).expect(403);

@@ -37,8 +37,10 @@ git clone https://github.com/Moulik-Budhiraja/Sprinkler-System
 # Change directory
 cd Sprinkler-System/server
 
-# Deploy the stack
-docker-compose up -d
+# Controller deployment: both values are mandatory
+SPRINKLER_DEMO=0 \
+SPRINKLER_PUBLIC_ORIGIN=https://sprinklers.example.test \
+docker compose up -d
 ```
 
 The default Compose binding is `127.0.0.1:5000`; physical controls are not
@@ -52,10 +54,19 @@ a restricted management VLAN protected by host/network firewall policy. Do
 not publish port 5000 directly to an untrusted network: the application does
 not embed or distribute an operator password.
 
-For synthetic review only, start with `SPRINKLER_DEMO=1`. Demo mode uses an
-owned private temporary datastore and an in-memory controller that cannot
-contact sprinkler hardware. Each demo process is isolated and cleans only its
-own temporary data when it exits.
+`SPRINKLER_DEMO` is mandatory and accepts exactly `0` or `1`; omission and all
+other values fail before the service binds. Controller mode (`0`) also requires
+`SPRINKLER_PUBLIC_ORIGIN` to be the canonical browser origin, including its
+scheme and non-default port. Browser mutation origins are compared only with
+that value, never with `Host` or forwarded headers.
+
+For synthetic review only, set `SPRINKLER_DEMO=1` and provide the review URL as
+`SPRINKLER_PUBLIC_ORIGIN`. Demo mode always uses an owned private temporary
+datastore and in-memory controller, regardless of `MICROCONTROLLER_HOST`, and
+cannot contact sprinkler hardware. Each demo process is isolated and cleans
+only its own temporary data when it exits. Ephemeral localhost tests that
+cannot know their port before binding may additionally set
+`SPRINKLER_TEST_ORIGIN=1`; startup rejects that mode unless demo mode is active.
 
 The JSON datastore acknowledges a mutation only after the same canonical v2
 envelope has replaced and been synced as both the primary file and its recovery
