@@ -1,0 +1,43 @@
+{
+  "route": "/",
+  "state": "explicit synthetic demo with deterministic clean browser context",
+  "requiredVisibleText": [
+    "Living Yard",
+    "Sprinkler system",
+    "Status",
+    "Quick Task",
+    "5m",
+    "15m",
+    "30m",
+    "60m",
+    "Schedules",
+    "History"
+  ],
+  "artifacts": {
+    "desktop-1440-copy.png": {
+      "viewport": [1440, 900],
+      "dimensions": [1440, 937],
+      "sha256": "2ce1ccd7c187279057ee95e8bb52bddaed11ce8bab061289713a831a4aa3af31"
+    },
+    "desktop-1440-standalone.png": {
+      "viewport": [1440, 900],
+      "dimensions": [1440, 965],
+      "sha256": "06e1c42d92c2aab3d9cba831dbeb63eff0b439d3077fbd993be028a54cdca983"
+    },
+    "mobile-844-copy.png": {
+      "viewport": [390, 844],
+      "dimensions": [390, 1117],
+      "sha256": "fb064c22a47db1070bf3423fba04c9851814c74bfd26042a9cf95fd29f16a1e1"
+    },
+    "mobile-1067-copy.png": {
+      "viewport": [390, 1067],
+      "dimensions": [390, 1117],
+      "sha256": "3f0bca60941636567b144b67cf129e910db69a003ae255605a0ff2effadb5f26"
+    },
+    "mobile-390x844-standalone.png": {
+      "viewport": [390, 844],
+      "dimensions": [390, 1165],
+      "sha256": "b58845b018847c72544ab0dca1db5264638a11e84012b37a1e3b4b6a4bc5df25"
+    }
+  }
+}
