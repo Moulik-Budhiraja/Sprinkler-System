@@ -452,6 +452,169 @@ test("definitive Stop conflict keeps truthful online task state and gives concis
   await expect(page.locator("#fieldMutationFeedback")).toContainText(/refresh required/i);
 });
 
+const removeOutcomeCases = [
+  {
+    name: "503",
+    response: { status: 503, headers: { "Retry-After": "1" }, body: { error: "datastore busy", outcome: "not_applied" } },
+    copy: "Datastore busy · Remove was not applied. Retry this same Remove in 1 second.",
+  },
+  {
+    name: "409",
+    response: { status: 409, body: { error: "requestId was already used for another operation" } },
+    copy: "Remove conflict · task unchanged. Refresh status before a deliberate new Remove.",
+  },
+  {
+    name: "202",
+    response: { status: 202, body: { operationId: "pending-remove-operation", state: "pending", outcome: "unknown" } },
+    copy: "Remove outcome unknown · check the visible task state. No new Remove will be sent.",
+  },
+  { name: "network", response: null, copy: "Remove not committed · retry only this same Remove." },
+];
+
+for (const viewport of [{ width: 1440, height: 900 }, ...mobileViewports]) {
+  for (const outcome of removeOutcomeCases) {
+    test(`queued Remove uses Remove-only ${outcome.name} recovery and stable retry at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      const requests = [];
+      await page.route("**/api/operations/**", (route) => route.fulfill({
+        status: outcome.name === "202" ? 200 : 404,
+        contentType: "application/json",
+        body: JSON.stringify(outcome.name === "202" ? outcome.response.body : { error: "operation not found" }),
+      }));
+      await page.route("**/api/tasks/delete", async (route) => {
+        requests.push(route.request().postDataJSON());
+        if (requests.length > 1) return route.continue();
+        if (!outcome.response) return route.abort("connectionreset");
+        return route.fulfill({
+          status: outcome.response.status,
+          headers: outcome.response.headers,
+          contentType: "application/json",
+          body: JSON.stringify(outcome.response.body),
+        });
+      });
+      await page.goto("/status");
+      await page.getByRole("button", { name: /Zone 6.*queued/i }).click();
+      const remove = page.getByRole("button", { name: /^Remove queued task/i });
+      await expect(remove).toHaveAttribute("aria-label", /Remove queued task/);
+      await expect(remove).not.toHaveAttribute("aria-label", /Stop/);
+      await remove.click();
+      const feedback = page.locator("#fieldMutationFeedback");
+      await expect(feedback).toHaveText(outcome.copy, { timeout: 3000 });
+      await expect(feedback).not.toContainText("Stop");
+      await expect(page.locator("[data-testid=controller-freshness]")).toHaveText("Controller status current");
+      if (outcome.name === "503" || outcome.name === "network") {
+        await expect(remove).toBeEnabled({ timeout: 2500 });
+        await remove.click();
+        await expect(feedback).toHaveText("Task removed");
+        expect(requests).toHaveLength(2);
+        expect(requests[1]).toEqual(requests[0]);
+      } else {
+        expect(requests).toHaveLength(1);
+      }
+    });
+  }
+}
+
+for (const viewport of [{ width: 1440, height: 900 }, ...mobileViewports]) {
+  test(`queued Remove reload after elapsed 503 delay keeps same-key retry usable at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    const requests = [];
+    await page.route("**/api/tasks/delete", async (route) => {
+      requests.push(route.request().postDataJSON());
+      if (requests.length > 1) return route.continue();
+      return route.fulfill({
+        status: 503,
+        headers: { "Content-Type": "application/json", "Retry-After": "1" },
+        body: JSON.stringify({ error: "datastore busy", outcome: "not_applied" }),
+      });
+    });
+    await page.goto("/status");
+    await page.getByRole("button", { name: /Zone 6.*queued/i }).click();
+    await page.getByRole("button", { name: /^Remove queued task/i }).click();
+    await expect(page.locator("#fieldMutationFeedback")).toHaveText("Datastore busy · Remove was not applied. Retry this same Remove in 1 second.");
+    await page.waitForTimeout(1100);
+    await page.reload();
+    await page.getByRole("button", { name: /Zone 6.*queued/i }).click();
+    const retry = page.getByRole("button", { name: /^Remove queued task/i });
+    await expect(retry).toBeEnabled();
+    await retry.click();
+    await expect(page.locator("#fieldMutationFeedback")).toHaveText("Task removed");
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toEqual(requests[0]);
+  });
+}
+
+test("legacy queued pending mutation infers Remove before reconciliation without emitting Stop copy", async ({ page }) => {
+  const requestId = "legacy-queued-remove-pending-0001";
+  await page.addInitScript(({ key, value }) => sessionStorage.setItem(key, JSON.stringify(value)), {
+    key: "sprinkler.pendingMutation.task-delete.queued.v1",
+    value: { requestId, payload: { id: "queued" } },
+  });
+  let tasksResolved = false;
+  const reconciliationOrder = [];
+  await page.route("**/api/tasks", async (route) => {
+    await route.continue();
+    tasksResolved = true;
+  });
+  await page.route("**/api/operations/**", (route) => {
+    reconciliationOrder.push(tasksResolved);
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ operationId: requestId, state: "pending", outcome: "unknown" }) });
+  });
+  await page.goto("/status");
+  await expect(page.locator("#fieldMutationFeedback")).toHaveText("Remove outcome unknown · check the visible task state. No new Remove will be sent.");
+  await expect(page.locator("#fieldMutationFeedback")).not.toContainText("Stop");
+  expect(reconciliationOrder).toEqual([true]);
+  await page.getByRole("button", { name: /Zone 6.*queued/i }).click();
+  await expect(page.getByRole("button", { name: /^Remove queued task/i })).toBeDisabled();
+  const stored = await page.evaluate(() => JSON.parse(sessionStorage.getItem("sprinkler.pendingMutation.task-delete.queued.v1")));
+  expect(stored).toMatchObject({ requestId, payload: { id: "queued" }, operationKind: "remove", recoveryState: "pending" });
+});
+
+for (const viewport of [{ width: 1440, height: 900 }, ...mobileViewports]) {
+  for (const operation of [
+    { kind: "stop", zoneNumber: 4, zone: /Zone 4.*watering/i, action: /^Stop watering/i, pending: "Stop outcome unknown · reconciling. No new Stop will be sent.", success: "Task stopped" },
+    { kind: "remove", zoneNumber: 6, zone: /Zone 6.*queued/i, action: /^Remove queued task/i, pending: "Remove outcome unknown · reconciling. No new Remove will be sent.", success: "Task removed" },
+  ]) {
+    test(`${operation.kind} reload restores atomic pending truth before successful reconciliation at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      const requests = [];
+      let operationChecks = 0;
+      let releaseReloadCheck;
+      const reloadCheck = new Promise((resolve) => { releaseReloadCheck = resolve; });
+      await page.route("**/api/tasks/delete", (route) => {
+        requests.push(route.request().postDataJSON());
+        return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ operationId: `${operation.kind}-pending`, state: "pending", outcome: "unknown" }) });
+      });
+      await page.route("**/api/operations/**", async (route) => {
+        operationChecks += 1;
+        if (operationChecks === 1) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ operationId: `${operation.kind}-pending`, state: "pending", outcome: "unknown" }) });
+        await reloadCheck;
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ operationId: `${operation.kind}-pending`, state: "completed", outcome: "committed" }) });
+      });
+      await page.goto("/status");
+      await page.getByRole("button", { name: operation.zone }).click();
+      await page.getByRole("button", { name: operation.action }).click();
+      await expect(page.locator("#fieldMutationFeedback")).toContainText(/outcome unknown/i);
+      await page.reload({ waitUntil: "domcontentloaded" });
+      const feedback = page.locator("#fieldMutationFeedback");
+      await expect(feedback).toHaveText(operation.pending);
+      await expect(page.locator("[data-testid=controller-freshness]")).toHaveText("Controller status current");
+      await page.locator(`[data-testid=field-zone-${operation.zoneNumber}] .field-zone`).click();
+      const action = page.getByRole("button", { name: operation.action });
+      await expect(action).toBeDisabled();
+      await action.click({ force: true });
+      expect(requests).toHaveLength(1);
+      const storedBefore = await page.evaluate(() => Object.entries(sessionStorage).filter(([key]) => key.includes("task-delete")));
+      expect(storedBefore).toHaveLength(1);
+      expect(JSON.parse(storedBefore[0][1])).toMatchObject({ requestId: requests[0].requestId, payload: { id: requests[0].id }, operationKind: operation.kind, recoveryState: "pending" });
+      releaseReloadCheck();
+      await expect(feedback).toHaveText(operation.success);
+      await expect.poll(() => page.evaluate(() => Object.keys(sessionStorage).filter((key) => key.includes("task-delete")).length)).toBe(0);
+      expect(requests).toHaveLength(1);
+    });
+  }
+}
+
 test("all mobile interactive targets meet 44 by 44 CSS pixels", async ({ page }) => {
   for (const viewport of mobileViewports) {
     await page.setViewportSize(viewport);

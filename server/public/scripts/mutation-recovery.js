@@ -43,6 +43,43 @@
     };
   }
 
+  function storageEntries(scopePrefix) {
+    const keyPrefix = `sprinkler.pendingMutation.${scopePrefix}`;
+    const keySuffix = ".v1";
+    const entries = [];
+    for (let index = 0; index < sessionStorage.length; index += 1) {
+      const key = sessionStorage.key(index);
+      if (!key?.startsWith(keyPrefix) || !key.endsWith(keySuffix)) continue;
+      const scope = key.slice("sprinkler.pendingMutation.".length, -keySuffix.length);
+      const value = storage(scope).load();
+      if (value) entries.push({ scope, value, store: storage(scope) });
+    }
+    return entries;
+  }
+
+  function taskDeleteSemantics(kind) {
+    const operationKind = kind === "remove" ? "remove" : "stop";
+    const label = operationKind === "remove" ? "Remove" : "Stop";
+    return Object.freeze({
+      kind: operationKind,
+      label,
+      progress: operationKind === "remove" ? "Removing" : "Stopping",
+      success: operationKind === "remove" ? "Task removed" : "Task stopped",
+      conflict: `${label} conflict · task unchanged. Refresh status before a deliberate new ${label}.`,
+      pending: `${label} outcome unknown · reconciling. No new ${label} will be sent.`,
+      rejected: `${label} rejected · task unchanged. Refresh status before a deliberate new ${label}.`,
+      notCommitted: `${label} not committed · retry only this same ${label}.`,
+      unresolved: `${label} outcome unknown · check the visible task state. No new ${label} will be sent.`,
+      notApplied(seconds) {
+        return `Datastore busy · ${label} was not applied. Retry this same ${label} in ${seconds} second${seconds === 1 ? "" : "s"}.`;
+      },
+      waiting(seconds) {
+        return `Datastore busy · wait ${seconds} second${seconds === 1 ? "" : "s"} before retrying this same ${label}.`;
+      },
+      failed(error) { return `${label} failed · ${error || "request rejected"}. Task unchanged.`; },
+    });
+  }
+
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   async function reconcile(requestId, { attempts = 4, delayMs = 250 } = {}) {
@@ -68,5 +105,5 @@
       : { kind: "network_ambiguous", status: 0, data: {} };
   }
 
-  window.MutationRecovery = Object.freeze({ classify, send, storage, reconcile, delay });
+  window.MutationRecovery = Object.freeze({ classify, send, storage, storageEntries, taskDeleteSemantics, reconcile, delay });
 })();

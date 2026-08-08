@@ -15,7 +15,9 @@ const manualMutationStore = window.MutationRecovery.storage("manual-start");
 let pendingManualMutation = manualMutationStore.load();
 let quickTaskConflict = false;
 let quickTaskRetryWaiting = false;
-const stopConflicts = new Set();
+const taskDeleteConflicts = new Map();
+const pendingTaskDeletes = new Map();
+const taskDeleteInFlight = new Set();
 
 const $ = (selector) => document.querySelector(selector);
 const node = (tag, className, text) => {
@@ -125,64 +127,172 @@ async function reconcileManualMutation() {
   }
 }
 
-async function stopTask(task) {
-  if (stopConflicts.has(String(task.id))) {
-    $("#fieldMutationFeedback").textContent = "Stop conflict · controller refresh required before a deliberate new Stop.";
+function taskDeleteFeedback() {
+  return $("#fieldMutationFeedback");
+}
+
+function rememberTaskDelete(store, pending) {
+  const taskId = String(pending.payload.id);
+  const existing = pendingTaskDeletes.get(taskId);
+  store.save(pending);
+  pendingTaskDeletes.set(taskId, { store, pending, reconciliationStarted: existing?.reconciliationStarted || false });
+  return pending;
+}
+
+function forgetTaskDelete(taskId, store) {
+  store.clear();
+  pendingTaskDeletes.delete(String(taskId));
+  field?.clearPendingTask(taskId);
+}
+
+function pendingTaskDeleteCopy() {
+  const labels = [...new Set([...pendingTaskDeletes.values()]
+    .filter(({ pending }) => pending.recoveryState === "pending" || pending.recoveryState === "sending")
+    .map(({ pending }) => pending.operationKind)
+    .filter((kind) => kind === "stop" || kind === "remove")
+    .map((kind) => window.MutationRecovery.taskDeleteSemantics(kind).label))];
+  if (labels.length === 1) return window.MutationRecovery.taskDeleteSemantics(labels[0].toLowerCase()).pending;
+  if (labels.length > 1) return `${labels.join(" and ")} outcomes unknown · reconciling. No new ${labels.join(" or ")} will be sent.`;
+  return "Task action outcome unknown · reconciling. No new Stop or Remove will be sent.";
+}
+
+function enableTaskDeleteRetry(taskId, pending, semantics) {
+  const remaining = Math.max(0, (pending.retryAt || 0) - Date.now());
+  const enable = () => {
+    const current = pendingTaskDeletes.get(String(taskId));
+    if (!current || current.pending.requestId !== pending.requestId || current.pending.recoveryState === "pending") return;
+    field?.clearPendingTask(taskId);
+  };
+  if (remaining > 0) setTimeout(enable, remaining);
+  else enable();
+  if (remaining > 0) taskDeleteFeedback().textContent = semantics.notApplied(Math.max(1, Math.ceil(remaining / 1000)));
+}
+
+async function reconcileTaskDelete(taskId, entry) {
+  const { store, pending } = entry;
+  const semantics = window.MutationRecovery.taskDeleteSemantics(pending.operationKind);
+  const result = await window.MutationRecovery.reconcile(pending.requestId);
+  if (result.kind === "committed") {
+    forgetTaskDelete(taskId, store);
+    taskDeleteFeedback().textContent = semantics.success;
+    await Promise.all([refreshTasks(), refreshHistory()]);
+  } else if (result.kind === "rejected") {
+    forgetTaskDelete(taskId, store);
+    taskDeleteConflicts.set(String(taskId), semantics.kind);
+    taskDeleteFeedback().textContent = semantics.rejected;
+  } else if (result.kind === "not_found" || result.kind === "not_applied") {
+    pending.recoveryState = "retry";
+    delete pending.retryAt;
+    rememberTaskDelete(store, pending);
+    field?.clearPendingTask(taskId);
+    taskDeleteFeedback().textContent = semantics.notCommitted;
+  } else {
+    taskDeleteFeedback().textContent = semantics.unresolved;
+  }
+}
+
+function beginTaskDeleteReconciliation(taskId, entry) {
+  const kind = entry.pending.operationKind;
+  if (entry.reconciliationStarted || (kind !== "stop" && kind !== "remove")) return;
+  entry.reconciliationStarted = true;
+  void reconcileTaskDelete(taskId, entry);
+}
+
+function restoreTaskDeleteMutations() {
+  const entries = window.MutationRecovery.storageEntries("task-delete.");
+  for (const { store, value } of entries) {
+    const taskId = String(value.payload.id || "");
+    if (!taskId) { store.clear(); continue; }
+    if (!value.recoveryState) value.recoveryState = "pending";
+    const entry = { store, pending: value, reconciliationStarted: false };
+    pendingTaskDeletes.set(taskId, entry);
+    field?.restorePendingTask(taskId, value.operationKind);
+  }
+  const unresolved = [...pendingTaskDeletes.entries()].filter(([, { pending }]) => pending.recoveryState !== "retry");
+  if (unresolved.length) {
+    taskDeleteFeedback().textContent = pendingTaskDeleteCopy();
+    for (const [taskId, entry] of unresolved) beginTaskDeleteReconciliation(taskId, entry);
+  }
+  for (const [taskId, { pending }] of pendingTaskDeletes) {
+    if (pending.recoveryState === "retry") {
+      const semantics = window.MutationRecovery.taskDeleteSemantics(pending.operationKind);
+      taskDeleteFeedback().textContent = pending.retryAt
+        ? semantics.notApplied(Math.max(1, Math.ceil((pending.retryAt - Date.now()) / 1000)))
+        : semantics.notCommitted;
+      enableTaskDeleteRetry(taskId, pending, semantics);
+    }
+  }
+}
+
+async function stopTask(task, operationKind) {
+  const taskId = String(task.id);
+  const semantics = window.MutationRecovery.taskDeleteSemantics(operationKind);
+  const conflictKind = taskDeleteConflicts.get(taskId);
+  if (conflictKind) {
+    const conflict = window.MutationRecovery.taskDeleteSemantics(conflictKind);
+    taskDeleteFeedback().textContent = `${conflict.label} conflict · controller refresh required before a deliberate new ${conflict.label}.`;
     field?.clearPendingTask(task.id);
     return;
   }
-  const store = window.MutationRecovery.storage(`task-delete.${String(task.id)}`);
-  let pending = store.load();
-  if (!pending) pending = store.save({ requestId: requestId("stop"), payload: { id: String(task.id) } });
-  const feedback = $("#fieldMutationFeedback");
-  if (Number.isFinite(pending.retryAt) && pending.retryAt > Date.now()) {
-    feedback.textContent = `Datastore busy · wait ${Math.ceil((pending.retryAt - Date.now()) / 1000)} second before retrying this same Stop.`;
+  const store = window.MutationRecovery.storage(`task-delete.${taskId}`);
+  let pending = pendingTaskDeletes.get(taskId)?.pending || store.load();
+  if (pending && pending.operationKind && pending.operationKind !== semantics.kind) {
+    field?.restorePendingTask(task.id, pending.operationKind);
+    taskDeleteFeedback().textContent = window.MutationRecovery.taskDeleteSemantics(pending.operationKind).unresolved;
     return;
   }
-  feedback.textContent = "Stopping";
+  if (pending?.recoveryState === "pending" || taskDeleteInFlight.has(taskId)) {
+    field?.restorePendingTask(task.id, pending.operationKind);
+    taskDeleteFeedback().textContent = window.MutationRecovery.taskDeleteSemantics(pending.operationKind).pending;
+    return;
+  }
+  if (!pending) {
+    pending = { requestId: requestId(semantics.kind), payload: { id: taskId }, operationKind: semantics.kind, recoveryState: "sending" };
+  } else {
+    pending.operationKind = semantics.kind;
+    pending.recoveryState = "sending";
+  }
+  rememberTaskDelete(store, pending);
+  const feedback = taskDeleteFeedback();
+  if (Number.isFinite(pending.retryAt) && pending.retryAt > Date.now()) {
+    feedback.textContent = semantics.waiting(Math.ceil((pending.retryAt - Date.now()) / 1000));
+    enableTaskDeleteRetry(taskId, pending, semantics);
+    return;
+  }
+  feedback.textContent = semantics.progress;
+  taskDeleteInFlight.add(taskId);
   const result = await window.MutationRecovery.send("/api/tasks/delete", {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...pending.payload, requestId: pending.requestId }),
   });
+  taskDeleteInFlight.delete(taskId);
   if (result.kind === "committed") {
-    stopConflicts.delete(String(task.id));
-    store.clear();
-    feedback.textContent = "Task stopped";
+    taskDeleteConflicts.delete(taskId);
+    forgetTaskDelete(taskId, store);
+    feedback.textContent = semantics.success;
     await Promise.all([refreshTasks(), refreshHistory()]);
   } else if (result.kind === "not_applied") {
     pending.retryAt = Date.now() + result.retryAfter * 1000;
-    store.save(pending);
-    feedback.textContent = `Datastore busy · Stop was not applied. Retry this same Stop in ${result.retryAfter} second${result.retryAfter === 1 ? "" : "s"}.`;
-    field?.clearPendingTask(task.id);
+    pending.recoveryState = "retry";
+    rememberTaskDelete(store, pending);
+    feedback.textContent = semantics.notApplied(result.retryAfter);
+    enableTaskDeleteRetry(taskId, pending, semantics);
   } else if (result.kind === "conflict") {
-    store.clear();
-    stopConflicts.add(String(task.id));
-    feedback.textContent = "Stop conflict · task unchanged. Refresh status before a deliberate new Stop.";
-    field?.clearPendingTask(task.id);
+    forgetTaskDelete(taskId, store);
+    taskDeleteConflicts.set(taskId, semantics.kind);
+    feedback.textContent = semantics.conflict;
   } else if (result.kind === "outcome_unknown" || result.kind === "network_ambiguous") {
-    feedback.textContent = "Stop outcome unknown · reconciling. No new Stop will be sent.";
-    const reconciled = await window.MutationRecovery.reconcile(pending.requestId);
-    if (reconciled.kind === "committed") {
-      store.clear();
-      feedback.textContent = "Task stopped";
-      await Promise.all([refreshTasks(), refreshHistory()]);
-    } else if (reconciled.kind === "rejected") {
-      store.clear();
-      stopConflicts.add(String(task.id));
-      feedback.textContent = "Stop rejected · task unchanged. Refresh status before a deliberate new Stop.";
-      field?.clearPendingTask(task.id);
-    } else if (reconciled.kind === "not_found" || reconciled.kind === "not_applied") {
-      feedback.textContent = "Stop not committed · retry only this same Stop.";
-      field?.clearPendingTask(task.id);
-    } else {
-      feedback.textContent = "Stop outcome unknown · check the visible task state. No new Stop will be sent.";
-      field?.clearPendingTask(task.id);
-    }
+    pending.recoveryState = "pending";
+    delete pending.retryAt;
+    rememberTaskDelete(store, pending);
+    feedback.textContent = semantics.pending;
+    const entry = pendingTaskDeletes.get(taskId);
+    entry.reconciliationStarted = true;
+    await reconcileTaskDelete(taskId, entry);
   } else {
-    store.clear();
-    feedback.textContent = `Stop failed · ${result.data.error || "request rejected"}. Task unchanged.`;
-    field?.clearPendingTask(task.id);
+    forgetTaskDelete(taskId, store);
+    feedback.textContent = semantics.failed(result.data.error);
   }
 }
 
@@ -192,7 +302,23 @@ async function refreshTasks() {
   try {
     const data = await request("/api/tasks");
     currentTasks = Array.isArray(data.tasks) ? data.tasks : [];
-    stopConflicts.clear();
+    taskDeleteConflicts.clear();
+    for (const [taskId, entry] of pendingTaskDeletes) {
+      if (entry.pending.operationKind !== "stop" && entry.pending.operationKind !== "remove") {
+        const task = currentTasks.find((candidate) => String(candidate.id) === taskId);
+        if (task) {
+          entry.pending.operationKind = task.startTime && task.startTime !== 0 ? "stop" : "remove";
+          entry.store.save(entry.pending);
+        }
+      }
+      if (entry.pending.recoveryState === "pending") beginTaskDeleteReconciliation(taskId, entry);
+      const retryStillWaiting = entry.pending.recoveryState === "retry"
+        && Number.isFinite(entry.pending.retryAt)
+        && entry.pending.retryAt > Date.now();
+      if (entry.pending.recoveryState !== "retry" || retryStillWaiting) {
+        field.restorePendingTask(taskId, entry.pending.operationKind);
+      }
+    }
     startingZones = [];
     quickTaskControllerAvailable = true;
     setControllerStatus("online");
@@ -427,9 +553,15 @@ async function refreshHistory() {
 
 document.addEventListener("DOMContentLoaded", () => {
   const fieldElement = $("#sprinklerField");
-  if (fieldElement && window.LivingYard) field = window.LivingYard.renderField(fieldElement, { onStop: stopTask, onRemove: stopTask });
+  if (fieldElement && window.LivingYard) {
+    field = window.LivingYard.renderField(fieldElement, {
+      onStop: (task) => stopTask(task, "stop"),
+      onRemove: (task) => stopTask(task, "remove"),
+    });
+  }
   setupQuickTask();
   if (field) {
+    restoreTaskDeleteMutations();
     refreshTasks();
     schedulePoll();
     $("#refreshController")?.addEventListener("click", () => {

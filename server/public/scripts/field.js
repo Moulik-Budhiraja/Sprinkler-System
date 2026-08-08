@@ -247,6 +247,7 @@
       offline: false,
       stale: false,
       zones: new Map(),
+      pendingTasks: new Map(),
       selected: null,
       layout: null,
     };
@@ -353,7 +354,7 @@
 
     function openPopover(z) {
       const s = state.zones.get(z);
-      if (state.stale || !s || (s.status !== "active" && s.status !== "queued" && s.status !== "stopping")) {
+      if (state.stale || !s || (s.status !== "active" && s.status !== "queued")) {
         return; // idle/starting selection shows the contour only — nothing fires
       }
       const wrap = wrapFor(z);
@@ -366,7 +367,7 @@
       const onLeftEdge = entry.x / state.layout.frame.w < 0.16;
       pop.classList.add(onLeftEdge ? "popover-right" : "popover-left");
 
-      if (s.status === "active" || s.status === "stopping") {
+      if (s.status === "active") {
         const stopBtn = document.createElement("button");
         stopBtn.type = "button";
         stopBtn.className = "valve-btn";
@@ -377,11 +378,11 @@
             : `Stop watering — zone ${z}`
         );
         stopBtn.innerHTML = valveSVG();
-        if (s.status === "stopping") stopBtn.disabled = true;
+        if (state.pendingTasks.has(String(s.task.id))) stopBtn.disabled = true;
         stopBtn.addEventListener("click", () => {
           if (stopBtn.disabled) return;
           stopBtn.disabled = true;
-          markStopping(s.task.id);
+          markStopping(s.task.id, "stop");
           handlers.onStop?.(s.task);
         });
         pop.appendChild(stopBtn);
@@ -396,9 +397,11 @@
             : `Remove queued task — zone ${z}`
         );
         removeBtn.innerHTML = `${removeCouplerSVG()}<span class="remove-text">Remove</span>`;
+        if (state.pendingTasks.has(String(s.task.id))) removeBtn.disabled = true;
         removeBtn.addEventListener("click", () => {
+          if (removeBtn.disabled) return;
           removeBtn.disabled = true;
-          markStopping(s.task.id);
+          markStopping(s.task.id, "remove");
           handlers.onRemove?.(s.task);
         });
         pop.appendChild(removeBtn);
@@ -408,21 +411,18 @@
       wrap.querySelector(".field-zone").setAttribute("aria-expanded", "true");
     }
 
-    function markStopping(taskId) {
-      for (const [z, s] of state.zones) {
-        if (s.task && s.task.id === taskId) {
-          state.zones.set(z, { ...s, status: "stopping" });
-        }
-      }
+    function markStopping(taskId, operationKind = "stop") {
+      state.pendingTasks.set(String(taskId), operationKind === "remove" ? "remove" : "stop");
       applyState();
     }
 
     function clearPendingTask(taskId) {
-      for (const [z, s] of state.zones) {
-        if (s.status === "stopping" && s.task?.id === taskId) {
-          state.zones.set(z, { ...s, status: s.task.startTime && s.task.startTime !== 0 ? "active" : "queued" });
-        }
-      }
+      state.pendingTasks.delete(String(taskId));
+      applyState();
+    }
+
+    function restorePendingTask(taskId, operationKind) {
+      state.pendingTasks.set(String(taskId), operationKind === "remove" ? "remove" : "stop");
       applyState();
     }
 
@@ -437,9 +437,11 @@
         wrap.className = wrap.className
           .replace(/\bis-(idle|active|queued|starting|stopping|offline)\b/g, "")
           .trim();
-        wrap.classList.add(`is-${s.status}`);
+        const pendingKind = s.task ? state.pendingTasks.get(String(s.task.id)) : null;
+        wrap.classList.add(`is-${pendingKind ? "stopping" : s.status}`);
         const btn = wrap.querySelector(".field-zone");
-        btn.setAttribute("aria-label", headLabel(entry.z, CHARACTERS[entry.kind].name, s));
+        const labelState = pendingKind === "stop" ? { ...s, status: "stopping" } : s;
+        btn.setAttribute("aria-label", headLabel(entry.z, CHARACTERS[entry.kind].name, labelState));
         btn.disabled = state.offline || state.stale;
         const waterline = wrap.querySelector(".waterline");
         if (s.status === "active" || s.status === "stopping") {
@@ -469,8 +471,11 @@
           if (state.offline || state.stale) clearSelection();
         } else if (pop) {
           const valve = pop.querySelector(".valve-btn");
-          if (valve) valve.disabled = s.status === "stopping";
-          pop.classList.toggle("is-stopping", s.status === "stopping");
+          const remove = pop.querySelector(".remove-btn");
+          const pending = Boolean(s.task && state.pendingTasks.has(String(s.task.id)));
+          if (valve) valve.disabled = pending;
+          if (remove) remove.disabled = pending;
+          pop.classList.toggle("is-stopping", pending);
         }
       }
     }
@@ -479,7 +484,6 @@
      * tasks: [{id, zones, runTime, startTime}], startTime 0 => queued.
      * startingZones: local pending-create zones. offline: fetch failed. */
     function update({ tasks = [], offline = false, stale = false, startingZones = [] } = {}) {
-      const previous = state.zones;
       state.offline = offline;
       state.stale = stale;
       state.zones = new Map();
@@ -489,9 +493,8 @@
         const elapsedMin = running ? Math.max(0, (nowSec - task.startTime) / 60) : 0;
         for (const z of task.zones) {
           if (z < 1 || z > VISIBLE_ZONE_COUNT) continue; // zones 7-8 stay API-only
-          const wasStopping = previous.get(z)?.status === "stopping" && previous.get(z)?.task.id === task.id;
           state.zones.set(z, {
-            status: wasStopping ? "stopping" : running ? "active" : "queued",
+            status: running ? "active" : "queued",
             task,
             stale,
             remaining: Math.max(0, Math.ceil(task.runTime - elapsedMin)),
@@ -528,7 +531,7 @@
     });
 
     build();
-    return { update, clearSelection, clearPendingTask, get layoutName() { return mqDesktop.matches ? "desktop" : "mobile"; } };
+    return { update, clearSelection, clearPendingTask, restorePendingTask, get layoutName() { return mqDesktop.matches ? "desktop" : "mobile"; } };
   }
 
   window.LivingYard = {
