@@ -1,45 +1,80 @@
-import express from "express";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const app = express();
-app.use(express.json());
-app.use(express.static(path.join(root, "public")));
-app.set("views", path.join(root, "views"));
-app.set("view engine", "ejs");
+import { createApp } from "../app.js";
 
-const schedules = {
-  morning: {
-    name: "Morning lawn",
-    days: [1, 3, 5],
-    startTime: "06:30",
-    lastRun: 1786141800,
-    enabled: true,
-    tasks: [{ zones: [1, 2, 3], runTime: 12 }],
-  },
-};
-const tasks = [
-  { id: "running", zones: [4], runTime: 20, startTime: 1 },
+const dir = await fs.mkdtemp(path.join(os.tmpdir(), "sprinkler-browser-"));
+const dataPath = path.join(dir, "data.json");
+const now = 1786190400; // 2026-08-08T12:00:00Z; fixed visual-review clock
+const schedules = Object.fromEntries(Array.from({ length: 5 }, (_, i) => [`schedule-${i + 1}`, {
+  name: ["Morning lawn", "Herb garden", "Trees", "Side beds", "Evening lawn"][i],
+  days: i % 2 ? [2, 4, 6] : [1, 3, 5],
+  startTime: `${String(6 + i).padStart(2, "0")}:30`,
+  lastRun: i === 4 ? null : now - (i + 1) * 86400,
+  enabled: i !== 3,
+  tasks: [{ zones: [i % 6 + 1], runTime: 10 + i }],
+}]));
+const history = Array.from({ length: 7 }, (_, i) => ({
+  timestamp: now - i * 3600,
+  sequence: 7 - i,
+  zones: [i % 6 + 1],
+  event: i % 3 === 2 ? "Stopped" : "Started",
+  reason: i % 2 ? "Remote" : "Schedule",
+}));
+const seed = { schedules: structuredClone(schedules), history: structuredClone(history) };
+await fs.writeFile(dataPath, JSON.stringify({ schedules, history, operations: {} }), { mode: 0o600 });
+
+let mode = "online";
+let nextId = 1;
+const initialTasks = [
+  { id: "running", zones: [4], runTime: 20, startTime: now - 240 },
   { id: "queued", zones: [6], runTime: 10, startTime: 0 },
 ];
-const history = [
-  { zones: [1, 2], event: "Started", reason: "Schedule", timestamp: 1786141800 },
-];
+let tasks = structuredClone(initialTasks);
+const controllerFetch = async (url, init = {}) => {
+  if (mode === "offline") throw new Error("synthetic offline");
+  const parsed = new URL(url);
+  if (parsed.pathname === "/tasks" && !init.method) return Response.json({ tasks });
+  if (parsed.pathname === "/tasks/add") {
+    const body = JSON.parse(init.body);
+    tasks.push(...body.tasks.map((task) => ({ id: `browser-${nextId++}`, ...task, startTime: 0 })));
+    if (mode === "lost-response") return new Response("lost", { status: 200 });
+    return Response.json({ success: true });
+  }
+  if (parsed.pathname === "/tasks/delete") {
+    const id = parsed.searchParams.get("id");
+    tasks = tasks.filter((task) => task.id !== id);
+    if (mode === "lost-response") return new Response("lost", { status: 200 });
+    return Response.json({ success: true });
+  }
+  return Response.json({ error: "not found" }, { status: 404 });
+};
 
-app.get("/healthz", (_req, res) => res.json({ ok: true, mode: "synthetic" }));
-app.get("/", (_req, res) => res.render("index"));
-app.get("/quick-task", (_req, res) => res.render("quick-task"));
-app.get("/schedules", (_req, res) => res.render("schedules"));
-app.get("/create-schedule", (_req, res) => res.render("create-schedule"));
-app.get("/edit-schedule", (_req, res) => res.render("edit-schedule"));
-app.get("/activity", (_req, res) => res.render("activity"));
-app.get("/controller", (_req, res) => res.render("controller"));
-app.get("/api/tasks", (_req, res) => res.json({ tasks }));
-app.post("/api/tasks/create", (_req, res) => res.status(201).json({ success: true }));
-app.delete("/api/tasks/delete", (_req, res) => res.json({ success: true }));
-app.get("/api/schedules", (_req, res) => res.json(schedules));
-app.put("/api/schedules/update", (req, res) => res.json(req.body));
-app.delete("/api/schedules/delete", (_req, res) => res.json({ success: true }));
-app.get("/api/history", (_req, res) => res.json(history));
-app.listen(4178, "127.0.0.1", () => console.log("synthetic fixture http://127.0.0.1:4178"));
+const instance = await createApp({ dataPath, controllerFetch, controllerTimeoutMs: 250 });
+instance.app.post("/__test/controller", (req, res) => {
+  mode = req.body?.mode ?? mode;
+  if (Array.isArray(req.body?.tasks)) tasks = req.body.tasks;
+  res.json({ mode, tasks });
+});
+instance.app.post("/__test/reset", async (req, res) => {
+  mode = "online";
+  nextId = 1;
+  tasks = structuredClone(initialTasks);
+  await instance.repository.mutate((data) => {
+    data.schedules = structuredClone(seed.schedules);
+    data.history = structuredClone(seed.history);
+    data.operations = {};
+  });
+  res.json({ reset: true });
+});
+const server = instance.app.listen(4178, "127.0.0.1", () => console.log("production createApp fixture http://127.0.0.1:4178"));
+
+async function shutdown() {
+  await new Promise((resolve) => server.close(resolve));
+  await instance.cleanup();
+  await fs.rm(dir, { recursive: true, force: true });
+  process.exit(0);
+}
+process.once("SIGTERM", shutdown);
+process.once("SIGINT", shutdown);

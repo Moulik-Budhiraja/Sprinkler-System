@@ -230,7 +230,8 @@
       const shared = s.task.zones.length > 1
         ? ` Stopping ends watering for ${listZones(s.task.zones)} together.`
         : "";
-      return `${base} — watering, about ${s.remaining} of ${s.task.runTime} minutes left. Opens the Stop watering task valve.${shared}`;
+      const stale = s.stale ? " Controller state is stale; controls unavailable." : "";
+      return `${base} — watering, about ${s.remaining} of ${s.task.runTime} minutes left.${stale} Opens the Stop watering task valve.${shared}`;
     }
     if (s.status === "queued") {
       const shared = s.task.zones.length > 1
@@ -244,6 +245,7 @@
   function renderField(container, handlers = {}) {
     const state = {
       offline: false,
+      stale: false,
       zones: new Map(),
       selected: null,
       layout: null,
@@ -299,11 +301,7 @@
 
         const waterline = document.createElement("div");
         waterline.className = "waterline";
-        waterline.setAttribute("role", "progressbar");
-        waterline.setAttribute("aria-label", `Zone ${entry.z} watering progress`);
-        waterline.setAttribute("aria-valuemin", "0");
-        waterline.setAttribute("aria-valuemax", "100");
-        waterline.setAttribute("aria-valuenow", "0");
+        waterline.setAttribute("aria-hidden", "true");
         waterline.innerHTML = `<div class="waterline-fill"></div>`;
 
         wrap.append(btn, waterline);
@@ -341,7 +339,7 @@
     }
 
     function toggleSelect(z) {
-      if (state.offline) return;
+      if (state.offline || state.stale) return;
       if (state.selected === z) {
         clearSelection();
         return;
@@ -355,7 +353,7 @@
 
     function openPopover(z) {
       const s = state.zones.get(z);
-      if (!s || (s.status !== "active" && s.status !== "queued" && s.status !== "stopping")) {
+      if (state.stale || !s || (s.status !== "active" && s.status !== "queued" && s.status !== "stopping")) {
         return; // idle/starting selection shows the contour only — nothing fires
       }
       const wrap = wrapFor(z);
@@ -433,23 +431,33 @@
         wrap.classList.add(`is-${s.status}`);
         const btn = wrap.querySelector(".field-zone");
         btn.setAttribute("aria-label", headLabel(entry.z, CHARACTERS[entry.kind].name, s));
-        btn.disabled = state.offline;
+        btn.disabled = state.offline || state.stale;
         const waterline = wrap.querySelector(".waterline");
         if (s.status === "active" || s.status === "stopping") {
+          waterline.removeAttribute("aria-hidden");
+          waterline.setAttribute("role", "progressbar");
+          waterline.setAttribute("aria-label", `Zone ${entry.z} watering progress`);
+          waterline.setAttribute("aria-valuemin", "0");
+          waterline.setAttribute("aria-valuemax", "100");
           waterline.setAttribute("aria-valuenow", String(s.pctDone));
           waterline.querySelector(".waterline-fill").style.width = `${s.pctDone}%`;
         } else {
-          waterline.setAttribute("aria-valuenow", "0");
+          waterline.setAttribute("aria-hidden", "true");
+          waterline.removeAttribute("role");
+          waterline.removeAttribute("aria-label");
+          waterline.removeAttribute("aria-valuemin");
+          waterline.removeAttribute("aria-valuemax");
+          waterline.removeAttribute("aria-valuenow");
           waterline.querySelector(".waterline-fill").style.width = "0%";
         }
       }
       if (state.selected !== null) {
         const s = state.offline ? null : state.zones.get(state.selected);
         const pop = container.querySelector("[data-testid=zone-action-popover]");
-        if (!s || s.status === "idle" || s.status === "starting" || state.offline) {
+        if (!s || s.status === "idle" || s.status === "starting" || state.offline || state.stale) {
           // Poll confirmed the task is gone (or we went offline) — retire controls.
           if (pop) closePopover();
-          if (state.offline) clearSelection();
+          if (state.offline || state.stale) clearSelection();
         } else if (pop) {
           const valve = pop.querySelector(".valve-btn");
           if (valve) valve.disabled = s.status === "stopping";
@@ -461,9 +469,10 @@
     /* update() receives truthful controller state only:
      * tasks: [{id, zones, runTime, startTime}], startTime 0 => queued.
      * startingZones: local pending-create zones. offline: fetch failed. */
-    function update({ tasks = [], offline = false, startingZones = [] } = {}) {
+    function update({ tasks = [], offline = false, stale = false, startingZones = [] } = {}) {
       const previous = state.zones;
       state.offline = offline;
+      state.stale = stale;
       state.zones = new Map();
       const nowSec = Date.now() / 1000;
       for (const task of tasks) {
@@ -475,6 +484,7 @@
           state.zones.set(z, {
             status: wasStopping ? "stopping" : running ? "active" : "queued",
             task,
+            stale,
             remaining: Math.max(0, Math.ceil(task.runTime - elapsedMin)),
             pctDone: running
               ? Math.max(0, Math.min(100, Math.round((elapsedMin / task.runTime) * 100)))

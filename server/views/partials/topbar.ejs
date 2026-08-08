@@ -5,16 +5,14 @@
   </a>
   <nav class="sidebar-nav" aria-label="Primary">
     <a href="/" data-testid="nav-today" class="<%= active === 'home' ? 'active' : '' %>"><span aria-hidden="true">⌂</span>Today</a>
+    <a href="/status" class="<%= active === 'status' ? 'active' : '' %>"><span aria-hidden="true">◎</span>Status</a>
     <a href="/schedules" class="<%= active === 'schedules' ? 'active' : '' %>"><span aria-hidden="true">≋</span>Schedules</a>
     <a href="/activity" class="<%= active === 'activity' ? 'active' : '' %>"><span aria-hidden="true">↻</span>Activity</a>
     <a href="/controller" class="<%= active === 'controller' ? 'active' : '' %>"><span aria-hidden="true">◌</span>Controller</a>
   </nav>
 </aside>
 <header class="mobile-header" data-testid="mobile-header">
-  <div class="mobile-brand">
-    <strong>Living Yard</strong>
-    <span class="product-name" data-testid="product-name">Sprinkler system</span>
-  </div>
+  <h1 class="mobile-product-heading" data-testid="mobile-product-heading">Sprinkler system</h1>
   <div class="controller-status" data-testid="controller-status"><i aria-hidden="true"></i><span id="mobileControllerStatus">Checking controller</span></div>
   <div class="header-divider" data-testid="header-divider"></div>
 </header>

@@ -41,6 +41,22 @@ cd Sprinkler-System/server
 docker-compose up -d
 ```
 
+The default Compose binding is `127.0.0.1:5000`; physical controls are not
+published to the LAN. Open the dashboard on the host or through an operator
+SSH tunnel. Cross-site browser mutations are rejected and the UI cannot be
+framed.
+
+Network exposure is opt-in. If remote access is required, place the loopback
+service behind an authenticated same-origin reverse proxy, or bind it only to
+a restricted management VLAN protected by host/network firewall policy. Do
+not publish port 5000 directly to an untrusted network: the application does
+not embed or distribute an operator password.
+
+For synthetic review only, start with `SPRINKLER_DEMO=1`. Demo mode uses an
+owned private temporary datastore and an in-memory controller that cannot
+contact sprinkler hardware. Each demo process is isolated and cleans only its
+own temporary data when it exits.
+
 ### ESP32
 
 1. Wire the relay board to the ESP32 as defined by the pin-outs in `microcontroller/microcontroller.ino`

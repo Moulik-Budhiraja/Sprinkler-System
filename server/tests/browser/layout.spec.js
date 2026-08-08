@@ -52,7 +52,7 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 390, height: 1067 
     await page.goto("/");
     await page.waitForSelector("[data-testid=field-zone-6]");
     const header = await box(page, "[data-testid=mobile-header]");
-    const product = await box(page, "[data-testid=product-name]");
+    const product = await box(page, "[data-testid=mobile-product-heading]");
     const controller = await box(page, "[data-testid=controller-status]");
     const divider = await box(page, "[data-testid=header-divider]");
     const quick = await box(page, "[data-testid=quick-task-heading]");
@@ -115,7 +115,7 @@ test("dashboard order, field geometry, interactions and accessibility", async ({
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations).toEqual([]);
   const navLinks = page.locator(".mobile-nav a");
-  await expect(navLinks).toHaveCount(4);
+  await expect(navLinks).toHaveCount(5);
   for (const link of await navLinks.all()) {
     const rect = await link.boundingBox();
     expect(rect.height).toBeGreaterThanOrEqual(44);
@@ -136,7 +136,7 @@ test("all six sprinkler controls remain fully inside the desktop field", async (
   controls.forEach((control, index) => inside(control, field, `Zone ${index + 1}`));
 });
 
-for (const route of ["/schedules", "/create-schedule", "/edit-schedule?id=morning", "/activity", "/controller", "/quick-task"]) {
+for (const route of ["/status", "/schedules", "/create-schedule", "/edit-schedule?id=schedule-1", "/activity", "/controller", "/quick-task"]) {
   test(`${route} renders cleanly with accessible six-zone controls`, async ({ page }) => {
     const problems = watchRuntime(page);
     await page.setViewportSize({ width: 390, height: 844 });

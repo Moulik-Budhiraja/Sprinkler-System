@@ -1,70 +1,10 @@
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <%- include("partials/head", { title: "Edit schedule — Living Yard" }) %>
-    <script src="/scripts/edit-schedule.js" defer></script>
-  </head>
-  <body>
-    <%- include("partials/topbar", { active: "schedules" }) %>
-
-    <main class="shell" style="max-width: 1000px">
-      <section class="hero reveal d1" style="padding-bottom: 18px">
-        <p class="hero__eyebrow">Automation</p>
-        <h1>Edit <em>schedule</em>.</h1>
-        <p class="hero__lead">Adjust the timing, days, or watering sequence.</p>
-      </section>
-
-      <section class="panel form-panel reveal d2">
-        <p class="subhead">General</p>
-
-        <div class="field">
-          <label class="field__label" for="scheduleName">Schedule Name</label>
-          <input type="text" class="input schedule-name" id="scheduleName" placeholder="e.g. Morning Trees" />
-        </div>
-
-        <div class="form-grid">
-          <div class="field">
-            <label class="field__label" for="startTime">Start Time</label>
-            <input type="time" class="input start-time" id="startTime" />
-          </div>
-          <div class="field">
-            <span class="field__label">Repeat On</span>
-            <div class="selectgrid selectgrid--days" id="dayGrid"></div>
-          </div>
-        </div>
-
-        <div class="divider"></div>
-
-        <p class="subhead">Tasks</p>
-        <div class="card-grid tasks" id="taskList" style="margin-bottom: 20px"></div>
-
-        <div class="builder">
-          <div class="field">
-            <span class="field__label">Zones for this task</span>
-            <div class="selectgrid" id="zoneGrid"></div>
-          </div>
-          <div class="form-grid" style="align-items: end">
-            <div class="field" style="margin-bottom: 0">
-              <label class="field__label" for="duration">Duration (min)</label>
-              <input type="number" class="input task-duration" id="duration" placeholder="15" min="1" value="15" />
-            </div>
-            <div class="field" style="margin-bottom: 0">
-              <button class="btn btn--water btn--block add-task-btn" id="addTaskBtn">+ Add Task</button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <div class="actionbar reveal d3">
-        <button class="btn btn--primary btn--lg btn--block save-btn" id="saveBtn">
-          Save Changes
-        </button>
-      </div>
-
-      <a href="/" class="backlink reveal d3">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
-        Back to dashboard
-      </a>
-    </main>
-  </body>
-</html>
+<!doctype html><html lang="en"><head><%- include("partials/head", { title: "Edit schedule — Living Yard" }) %><script src="/scripts/edit-schedule.js" defer></script></head>
+<body data-page="edit-schedule"><a class="skip-link" href="#main">Skip to main content</a><%- include("partials/topbar", { active: "schedules" }) %>
+<main id="main" class="shell editor-page"><header class="page-head"><h1>Edit schedule</h1></header>
+<section class="editor-form" aria-label="Edit schedule details">
+  <div class="form-grid"><div class="form-field"><label class="field-label" for="scheduleName">Name</label><input type="text" class="input schedule-name" id="scheduleName" maxlength="80" autocomplete="off"></div><div class="form-field"><label class="field-label" for="startTime">Start time</label><input type="time" class="input start-time" id="startTime"></div></div>
+  <fieldset class="form-field form-fieldset"><legend class="field-label">Days</legend><div class="selectgrid selectgrid--days" id="dayGrid"></div></fieldset>
+  <div class="task-section"><h2 class="micro-heading">Sequence</h2><div class="tasks" id="taskList"></div></div>
+  <div class="builder"><fieldset class="form-field form-fieldset"><legend class="field-label">Zones for next task</legend><div class="selectgrid" id="zoneGrid"></div></fieldset><div class="builder-controls"><div class="form-field"><label class="field-label" for="duration">Minutes</label><input type="number" class="input task-duration" id="duration" min="1" max="1440" value="15"></div><button class="btn" id="addTaskBtn" type="button">Add task</button></div></div>
+  <output class="feedback" id="formFeedback" aria-live="polite"></output><div class="form-actions"><button class="btn btn--primary save-btn" id="saveBtn" type="button">Save changes</button><button class="btn btn--danger" id="deleteScheduleBtn" type="button">Delete schedule</button><a class="btn" href="/schedules">Cancel</a></div>
+</section></main><%- include("partials/mobile-nav", { active: "schedules" }) %></body></html>

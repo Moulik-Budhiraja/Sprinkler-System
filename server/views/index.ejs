@@ -5,24 +5,25 @@
   <script src="/scripts/field.js" defer></script>
   <script src="/scripts/index.js" defer></script>
 </head>
-<body>
+<body data-page="dashboard">
   <a class="skip-link" href="#main">Skip to main content</a>
   <%- include("partials/topbar", { active: "home" }) %>
   <main id="main" class="shell dashboard">
+    <header class="page-head"><h1>Today</h1></header>
     <section class="qt" data-dashboard-section="quick-task" data-testid="quick-task" aria-labelledby="quickTaskHeading">
       <form id="quickTaskForm">
         <div class="qt-row">
-          <h1 class="qt-heading" id="quickTaskHeading" data-testid="quick-task-heading">Quick Task</h1>
-          <fieldset class="qt-zones"><legend class="sr-only">Zones</legend><div id="quickZones" class="qt-zones"></div></fieldset>
+          <h2 class="qt-heading" id="quickTaskHeading" data-testid="quick-task-heading">Quick Task</h2>
+          <div id="quickZones" class="qt-zones" role="group" aria-label="Zones"></div>
           <span class="qt-sep" aria-hidden="true"></span>
-          <fieldset class="qt-durations"><legend class="sr-only">Duration</legend><div id="quickDurations" class="qt-durations"></div></fieldset>
+          <div id="quickDurations" class="qt-durations" role="group" aria-label="Duration"></div>
           <button class="qt-start" type="submit">Start</button>
         </div>
         <output id="quickMessage" class="qt-feedback" aria-live="polite"></output>
       </form>
     </section>
 
-    <section id="sprinklerField" class="field" data-dashboard-section="field" data-testid="field" aria-label="Sprinkler field"></section>
+    <section id="sprinklerField" class="lawn-field" data-dashboard-section="field" data-testid="field" aria-label="Sprinkler field"></section>
 
     <section class="section-block" data-dashboard-section="schedules" aria-labelledby="schedulesHeading">
       <header class="section-head"><h2 id="schedulesHeading">Schedules</h2><a href="/schedules">All schedules</a></header>
@@ -33,7 +34,8 @@
       <header class="section-head"><h2 id="historyHeading">History</h2><a href="/activity">All activity</a></header>
       <div id="history" class="history-list" aria-live="polite"><p class="empty">No history</p></div>
     </section>
+    <div class="freshness-line"><span data-testid="controller-freshness" aria-live="polite">Controller status current</span><button class="text-action" id="refreshController" type="button" aria-label="Refresh controller status">Refresh</button></div>
   </main>
-  <nav class="mobile-nav" aria-label="Mobile navigation"><a class="active" href="/">Today</a><a href="/schedules">Schedules</a><a href="/activity">Activity</a><a href="/controller">Controller</a></nav>
+  <%- include("partials/mobile-nav", { active: "home" }) %>
 </body>
 </html>

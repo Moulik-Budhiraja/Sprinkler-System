@@ -1,3 +1,11 @@
-
 .env
 node_modules/
+tests/
+test-results/
+playwright-report/
+screenshots/
+data/
+yolo_data/
+*.log
+.git/
+.gitignore

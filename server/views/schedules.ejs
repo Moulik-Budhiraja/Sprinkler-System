@@ -1,1 +1,5 @@
-<!doctype html><html lang="en"><head><%- include("partials/head", { title: "Schedules — Living Yard" }) %><script src="/scripts/index.js" defer></script></head><body><%- include("partials/topbar", { active: "schedules" }) %><main class="shell"><header class="page-head"><h1>Schedules</h1><a class="btn btn--primary" href="/create-schedule">New schedule</a></header><div id="schedules" class="schedule-list" aria-live="polite"><p class="quiet">No schedules</p></div></main><nav class="mobile-nav" aria-label="Mobile navigation"><a href="/">Today</a><a class="active" href="/schedules">Schedules</a><a href="/activity">Activity</a><a href="/controller">Controller</a></nav></body></html>
+<!doctype html>
+<html lang="en"><head><%- include("partials/head", { title: "Schedules — Living Yard" }) %><script src="/scripts/index.js" defer></script></head>
+<body data-page="schedules"><a class="skip-link" href="#main">Skip to main content</a><%- include("partials/topbar", { active: "schedules" }) %>
+<main id="main" class="shell data-page"><header class="page-head data-page-head"><h1>Schedules</h1><a class="btn btn--primary" href="/create-schedule">New schedule</a></header><div id="schedules" class="schedule-list schedule-table" aria-live="polite"><p class="quiet">No schedules</p></div></main>
+<%- include("partials/mobile-nav", { active: "schedules" }) %></body></html>

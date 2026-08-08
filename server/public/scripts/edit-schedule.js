@@ -1,199 +1,89 @@
 const ZONE_COUNT = 6;
 const DAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
+const scheduleId = new URLSearchParams(location.search).get("id");
+const tasks = [];
+const feedback = document.getElementById("formFeedback");
+let enabled = true;
+const deleteRequestId = `schedule-delete-${crypto.randomUUID()}`;
 
-const urlParams = new URLSearchParams(window.location.search);
-const scheduleId = urlParams.get("id");
-
-function buildZoneGrid(containerId) {
-  const grid = document.getElementById(containerId);
-  for (let i = 1; i <= ZONE_COUNT; i++) {
-    const tile = document.createElement("div");
-    tile.className = "tile";
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.id = `zone${i}`;
-    const label = document.createElement("label");
-    label.setAttribute("for", `zone${i}`);
-    label.textContent = i;
-    tile.append(input, label);
-    grid.appendChild(tile);
-  }
+function choice(grid, id, text, className = "") {
+  const tile = document.createElement("span");
+  tile.className = `choice ${className}`.trim();
+  const input = document.createElement("input"); input.type = "checkbox"; input.id = id;
+  const label = document.createElement("label"); label.htmlFor = id; label.textContent = text;
+  tile.append(input, label); grid.append(tile);
 }
-
-function buildDayGrid(containerId) {
-  const grid = document.getElementById(containerId);
-  DAY_LABELS.forEach((label, i) => {
-    const tile = document.createElement("div");
-    tile.className = "tile tile--day";
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.id = `day${i}`;
-    const lbl = document.createElement("label");
-    lbl.setAttribute("for", `day${i}`);
-    lbl.textContent = label;
-    tile.append(input, lbl);
-    grid.appendChild(tile);
-  });
-}
-
-const tasks = {};
-let enabledState = true;
+for (let zone = 1; zone <= ZONE_COUNT; zone += 1) choice(document.getElementById("zoneGrid"), `zone${zone}`, String(zone));
+DAY_LABELS.forEach((label, day) => choice(document.getElementById("dayGrid"), `day${day}`, label, "choice-day"));
 
 function renderTasks() {
-  const container = document.getElementById("taskList");
-  container.innerHTML = "";
-
-  const entries = Object.entries(tasks);
-  if (entries.length === 0) {
-    container.appendChild(emptyRow("No tasks yet — add one below."));
-    return;
-  }
-
-  entries.forEach(([id, task], index) => {
-    const row = document.createElement("div");
-    row.className = "builder-task";
-
-    const order = document.createElement("div");
-    order.className = "builder-task__order";
-    order.textContent = index + 1;
-
-    const info = document.createElement("div");
-    info.className = "builder-task__info";
-    task.zones.forEach((z) => {
-      const chip = document.createElement("span");
-      chip.className = "chip grass";
-      chip.textContent = `Zone ${z}`;
-      info.appendChild(chip);
-    });
-    const dur = document.createElement("span");
-    dur.className = "chip";
-    dur.textContent = `${task.runTime} min`;
-    info.appendChild(dur);
-
-    const remove = document.createElement("button");
-    remove.className = "btn btn--danger btn--sm";
-    remove.textContent = "Remove";
-    remove.addEventListener("click", () => {
-      delete tasks[id];
-      renderTasks();
-    });
-
-    row.append(order, info, remove);
-    container.appendChild(row);
+  const list = document.getElementById("taskList"); list.replaceChildren();
+  if (!tasks.length) { const empty = document.createElement("p"); empty.className = "empty"; empty.textContent = "No tasks yet"; list.append(empty); return; }
+  tasks.forEach((task, index) => {
+    const row = document.createElement("div"); row.className = "builder-task";
+    const order = document.createElement("span"); order.className = "builder-task-order"; order.textContent = String(index + 1);
+    const info = document.createElement("span"); info.className = "builder-task-info"; info.textContent = `Zones ${task.zones.join(", ")} · ${task.runTime} min`;
+    const remove = document.createElement("button"); remove.type = "button"; remove.className = "text-action danger-action"; remove.textContent = "Remove"; remove.setAttribute("aria-label", `Remove task ${index + 1}`);
+    remove.addEventListener("click", () => { tasks.splice(index, 1); renderTasks(); });
+    row.append(order, info, remove); list.append(row);
   });
 }
-
-function emptyRow(text) {
-  const div = document.createElement("div");
-  div.className = "empty";
-  div.textContent = text;
-  return div;
-}
-
-function setupAddTask() {
-  document.getElementById("addTaskBtn").addEventListener("click", () => {
-    const zones = [];
-    for (let i = 1; i <= ZONE_COUNT; i++) {
-      if (document.querySelector(`#zone${i}`).checked) zones.push(i);
-    }
-    if (zones.length === 0) return;
-
-    const duration = document.querySelector(".task-duration").valueAsNumber || 15;
-    tasks[Date.now() + Math.random()] = { zones, runTime: duration };
-
-    for (let i = 1; i <= ZONE_COUNT; i++) {
-      document.querySelector(`#zone${i}`).checked = false;
-    }
-    renderTasks();
-  });
-}
-
-function flash(btn, message) {
-  const original = btn.textContent;
-  btn.textContent = message;
-  setTimeout(() => (btn.textContent = original), 1600);
-}
-
-buildZoneGrid("zoneGrid");
-buildDayGrid("dayGrid");
-setupAddTask();
 renderTasks();
 
-/* load existing schedule */
-fetch("/api/schedules")
-  .then((res) => {
-    if (!res.ok) throw new Error(`Schedule request failed (${res.status})`);
-    return res.json();
-  })
-  .then((schedules) => {
-    const schedule = schedules[scheduleId];
-    if (!schedule) {
-      flash(document.getElementById("saveBtn"), "Schedule not found");
-      return;
-    }
+document.getElementById("addTaskBtn").addEventListener("click", () => {
+  const zones = Array.from({ length: ZONE_COUNT }, (_, index) => index + 1).filter((zone) => document.getElementById(`zone${zone}`).checked);
+  const duration = document.getElementById("duration").valueAsNumber;
+  if (!zones.length || !Number.isInteger(duration) || duration < 1 || duration > 1440) { feedback.textContent = "Select zones and enter 1–1440 minutes"; return; }
+  tasks.push({ zones, runTime: duration });
+  zones.forEach((zone) => { document.getElementById(`zone${zone}`).checked = false; });
+  feedback.textContent = ""; renderTasks();
+});
 
-    enabledState = schedule.enabled;
-    document.querySelector(".schedule-name").value = schedule.name || "";
-    document.querySelector(".start-time").value = schedule.startTime || "";
-
-    (schedule.days || []).forEach((day) => {
-      const input = document.querySelector(`#day${day}`);
-      if (input) input.checked = true;
-    });
-
-    (schedule.tasks || []).forEach((task) => {
-      tasks[Date.now() + Math.random()] = {
-        zones: task.zones,
-        runTime: task.runTime,
-      };
-    });
-
-    renderTasks();
-  })
-  .catch(() => flash(document.getElementById("saveBtn"), "Schedule unavailable"));
-
-document.getElementById("saveBtn").addEventListener("click", async (e) => {
-  const btn = e.currentTarget;
-
-  const name = document.querySelector(".schedule-name").value.trim();
-  const days = [];
-  for (let i = 0; i <= 6; i++) {
-    if (document.querySelector(`#day${i}`).checked) days.push(i);
-  }
-  const startTime = document.querySelector(".start-time").value;
-  const parsedTasks = Object.values(tasks).map((t) => ({
-    zones: t.zones,
-    runTime: t.runTime,
-  }));
-
-  if (!name) {
-    flash(btn, "Add a name first");
-    return;
-  }
-  if (parsedTasks.length === 0) {
-    flash(btn, "Add at least one task");
-    return;
-  }
-
-  btn.disabled = true;
-  btn.textContent = "Saving…";
+async function load() {
   try {
-    const response = await fetch("/api/schedules/update", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        id: scheduleId,
-        name,
-        days,
-        startTime,
-        tasks: parsedTasks,
-        enabled: enabledState,
-      }),
-    });
-    if (!response.ok) throw new Error(`Schedule request failed (${response.status})`);
-    window.location.href = "/schedules";
-  } catch {
-    btn.disabled = false;
-    btn.textContent = "Something went wrong — retry";
+    const response = await fetch("/api/schedules");
+    if (!response.ok) throw new Error("Schedule unavailable");
+    const schedule = (await response.json())[scheduleId];
+    if (!schedule) throw new Error("Schedule not found");
+    enabled = schedule.enabled;
+    document.getElementById("scheduleName").value = schedule.name;
+    document.getElementById("startTime").value = schedule.startTime;
+    schedule.days.forEach((day) => { document.getElementById(`day${day}`).checked = true; });
+    tasks.push(...schedule.tasks.map((task) => ({ zones: [...task.zones], runTime: task.runTime })));
+    renderTasks();
+  } catch (error) { feedback.textContent = error.message; }
+}
+load();
+
+document.getElementById("saveBtn").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const payload = { id: scheduleId, name: document.getElementById("scheduleName").value.trim(), days: Array.from({ length: 7 }, (_, day) => day).filter((day) => document.getElementById(`day${day}`).checked), startTime: document.getElementById("startTime").value, tasks, enabled };
+  if (!payload.name || !payload.days.length || !payload.startTime || !tasks.length) { feedback.textContent = "Complete name, time, days and sequence"; return; }
+  button.disabled = true; feedback.textContent = "Saving";
+  try {
+    const response = await fetch("/api/schedules/update", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    if (!response.ok) throw new Error((await response.json()).error || "Save failed");
+    location.assign("/schedules");
+  } catch (error) { button.disabled = false; feedback.textContent = error.message; }
+});
+
+document.getElementById("deleteScheduleBtn").addEventListener("click", async (event) => {
+  if (!window.confirm("Delete this schedule?")) return;
+  const button = event.currentTarget; button.disabled = true;
+  try {
+    const response = await fetch("/api/schedules/delete", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: scheduleId, requestId: deleteRequestId }) });
+    if (!response.ok) {
+      const error = new Error((await response.json()).error || "Delete failed");
+      error.status = response.status;
+      throw error;
+    }
+    location.assign("/schedules");
+  } catch (error) {
+    if (error.status) {
+      button.disabled = false;
+      feedback.textContent = `Delete failed · ${error.message}`;
+    } else {
+      feedback.textContent = "Delete outcome unknown · refresh Schedules before another action";
+    }
   }
 });
