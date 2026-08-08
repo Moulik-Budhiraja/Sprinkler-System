@@ -135,6 +135,66 @@ test("editor schedule deletion lost response reports unknown and disables blind 
   await expect(remove).toBeDisabled();
 });
 
+test("schedule create locks semantic input after a committed lost response and reconciles durable success", async ({ page }) => {
+  let releaseStatus;
+  const statusGate = new Promise((resolve) => { releaseStatus = resolve; });
+  await page.route("**/api/operations/**", async (route) => {
+    await statusGate;
+    await route.continue();
+  });
+  await page.route("**/api/schedules/create", async (route) => {
+    await route.fetch();
+    await route.abort("connectionreset");
+  });
+  await page.goto("/create-schedule");
+  await page.locator("#scheduleName").fill("Lost response schedule");
+  await page.locator("#startTime").fill("08:15");
+  await page.locator("#day1").check();
+  await page.locator("#zone1").check();
+  await page.locator("#duration").fill("10");
+  await page.locator("#addTaskBtn").click();
+  await page.locator("#saveBtn").click();
+  await expect(page.locator("#formFeedback")).toContainText(/outcome unknown/i);
+  await expect(page.locator("#saveBtn")).toBeDisabled();
+  await expect(page.locator("#scheduleName")).toBeDisabled();
+  releaseStatus();
+  await expect(page).toHaveURL(/\/schedules$/, { timeout: 5000 });
+  await expect(page.getByText("Lost response schedule", { exact: true })).toBeVisible();
+});
+
+test("schedule create retries only the same stable key after reconciliation confirms no commit", async ({ page }) => {
+  const requestIds = [];
+  let attempts = 0;
+  await page.route("**/api/schedules/create", async (route) => {
+    const body = route.request().postDataJSON();
+    requestIds.push(body.requestId);
+    attempts += 1;
+    if (attempts === 1) return route.abort("connectionreset");
+    return route.continue();
+  });
+  await page.goto("/create-schedule");
+  await page.locator("#scheduleName").fill("Same key retry");
+  await page.locator("#startTime").fill("08:20");
+  await page.locator("#day2").check();
+  await page.locator("#zone2").check();
+  await page.locator("#duration").fill("11");
+  await page.locator("#addTaskBtn").click();
+  await page.locator("#saveBtn").click();
+  await expect(page.locator("#formFeedback")).toContainText(/outcome unknown/i);
+  await expect(page.locator("#scheduleName")).toBeDisabled();
+  await expect(page.locator("#saveBtn")).toBeEnabled({ timeout: 5000 });
+  await expect(page.locator("#saveBtn")).toHaveText(/retry/i);
+  await page.reload();
+  await expect(page.locator("#scheduleName")).toHaveValue("Same key retry");
+  await expect(page.locator("#scheduleName")).toBeDisabled();
+  await expect(page.locator("#saveBtn")).toBeEnabled({ timeout: 5000 });
+  await expect(page.locator("#saveBtn")).toHaveText(/retry/i);
+  await page.locator("#saveBtn").click();
+  await expect(page).toHaveURL(/\/schedules$/, { timeout: 5000 });
+  expect(requestIds).toHaveLength(2);
+  expect(requestIds[0]).toBe(requestIds[1]);
+});
+
 test("all mobile interactive targets meet 44 by 44 CSS pixels", async ({ page }) => {
   for (const viewport of mobileViewports) {
     await page.setViewportSize(viewport);

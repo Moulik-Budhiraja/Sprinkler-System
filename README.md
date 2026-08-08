@@ -57,13 +57,19 @@ owned private temporary datastore and an in-memory controller that cannot
 contact sprinkler hardware. Each demo process is isolated and cleans only its
 own temporary data when it exits.
 
-The JSON datastore acknowledges a mutation only after the same checksummed,
-monotonically revisioned snapshot has replaced and been synced as both the
-primary file and its recovery snapshot. On restart, the newest valid revision
-repairs a missing, corrupt, or older peer. Cross-process writers use a renewable
-owner-token lease; an expired lock is recovered only after its recorded process
-is dead or its process-start identity no longer matches, and only the current
-owner token may release the lock.
+The JSON datastore acknowledges a mutation only after the same canonical v2
+envelope has replaced and been synced as both the primary file and its recovery
+snapshot. Its checksum binds the format, monotonic revision, and complete
+payload. On restart, the newest valid v2 revision repairs a missing, corrupt, or
+older peer. Legacy payload-only snapshots migrate explicitly: a valid primary
+wins without trusting legacy revision metadata, recovery is used only when the
+primary is missing or invalid, and both peers are then rewritten as v2.
+Schedule creation uses a client-stable request ID and atomically stores its
+payload hash and resulting schedule ID with the schedule, so a lost response is
+reconciled or retried with the same key rather than creating another schedule.
+Cross-process writers use a renewable owner-token lease; an expired lock is
+recovered only after its recorded process is dead or its process-start identity
+no longer matches, and only the current owner token may release the lock.
 
 ### ESP32
 

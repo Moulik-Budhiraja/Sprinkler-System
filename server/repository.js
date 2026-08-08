@@ -7,6 +7,8 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 const EMPTY_DATA = Object.freeze({ schedules: {}, history: [], operations: {} });
 const REVISION = Symbol("repositoryRevision");
+const SNAPSHOT_FORMAT = 2;
+const MAX_REVISION = Number.MAX_SAFE_INTEGER - 1;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function normalize(data, revision = Number.isSafeInteger(data?.[REVISION]) ? data[REVISION] : 0) {
@@ -28,7 +30,23 @@ function dataPayload(data) {
   };
 }
 
-function checksum(data) {
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function v2Checksum(payload, revision) {
+  return crypto.createHash("sha256").update(canonicalJson({
+    format: SNAPSHOT_FORMAT,
+    revision,
+    payload,
+  })).digest("hex");
+}
+
+function legacyChecksum(data) {
   return crypto.createHash("sha256").update(JSON.stringify(dataPayload(data))).digest("hex");
 }
 
@@ -36,18 +54,30 @@ function serialize(data, revision) {
   const payload = dataPayload(data);
   return `${JSON.stringify({
     ...payload,
-    _repository: { format: 1, revision, checksum: checksum(payload) },
+    _repository: { format: SNAPSHOT_FORMAT, revision, checksum: v2Checksum(payload, revision) },
   })}\n`;
 }
 
 function parseSnapshot(raw) {
   const parsed = JSON.parse(raw);
-  const metadata = parsed?._repository;
-  if (metadata === undefined) return normalize(parsed, 0);
-  if (metadata?.format !== 1 || !Number.isSafeInteger(metadata.revision) || metadata.revision < 0 || metadata.checksum !== checksum(parsed)) {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid datastore snapshot");
+  const metadata = parsed._repository;
+  if (metadata === undefined) return { data: normalize(parsed, 0), kind: "legacy" };
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) throw new Error("invalid datastore revision metadata");
+  if (metadata.format === 1) {
+    if (!Number.isSafeInteger(metadata.revision) || metadata.revision < 0 || metadata.checksum !== legacyChecksum(parsed)) {
+      throw new Error("invalid datastore revision metadata");
+    }
+    return { data: normalize(parsed, 0), kind: "legacy" };
+  }
+  const payload = dataPayload(parsed);
+  const metadataKeys = Object.keys(metadata).sort();
+  if (metadata.format !== SNAPSHOT_FORMAT || metadataKeys.join(",") !== "checksum,format,revision" ||
+      !Number.isSafeInteger(metadata.revision) || metadata.revision < 0 || metadata.revision > MAX_REVISION ||
+      typeof metadata.checksum !== "string" || metadata.checksum !== v2Checksum(payload, metadata.revision)) {
     throw new Error("invalid datastore revision metadata");
   }
-  return normalize(parsed, metadata.revision);
+  return { data: normalize(parsed, metadata.revision), kind: "v2", checksum: metadata.checksum };
 }
 
 async function processStartIdentity(pid) {
@@ -135,9 +165,10 @@ export class JsonRepository {
   async #readSnapshot(filePath) {
     try {
       const raw = await fs.readFile(filePath, "utf8");
-      return { filePath, raw, data: parseSnapshot(raw), error: null };
+      const parsed = parseSnapshot(raw);
+      return { filePath, raw, ...parsed, error: null };
     } catch (error) {
-      return { filePath, raw: null, data: null, error };
+      return { filePath, raw: null, data: null, kind: null, checksum: null, error };
     }
   }
 
@@ -151,12 +182,26 @@ export class JsonRepository {
       if (primary.error?.code === "ENOENT" && recovery.error?.code === "ENOENT") throw primary.error;
       throw primary.error?.code !== "ENOENT" ? primary.error : recovery.error;
     }
-    valid.sort((left, right) => right.data[REVISION] - left.data[REVISION] || (left.filePath === this.dataPath ? -1 : 1));
-    const newest = valid[0].data;
-    const serialized = serialize(newest, newest[REVISION]);
+
+    const v2 = valid.filter((snapshot) => snapshot.kind === "v2");
+    let selected;
+    if (v2.length) {
+      v2.sort((left, right) => right.data[REVISION] - left.data[REVISION] || (left.filePath === this.dataPath ? -1 : 1));
+      if (v2.length === 2 && v2[0].data[REVISION] === v2[1].data[REVISION] && v2[0].checksum !== v2[1].checksum) {
+        throw new Error("divergent datastore snapshots at equal revision");
+      }
+      selected = v2[0];
+    } else {
+      // Legacy revisions were not bound to their payload. Never use them for ranking.
+      selected = primary.data ? primary : recovery;
+    }
+
+    const newest = selected.data;
+    const revision = selected.kind === "v2" ? newest[REVISION] : 1;
+    const serialized = serialize(newest, revision);
     const synchronized = primary.raw === serialized && recovery.raw === serialized;
-    if (repair && !synchronized) await this.#writeRevision(newest, newest[REVISION]);
-    return normalize(newest, newest[REVISION]);
+    if (repair && !synchronized) await this.#writeRevision(newest, revision);
+    return normalize(newest, revision);
   }
 
   async #ownerIsDeadOrReused(owner) {

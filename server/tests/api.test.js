@@ -123,7 +123,7 @@ test("schedule create/update/delete roundtrip preserves any zone 1-8", async () 
   const { app } = await createApp({ dataPath, controllerFetch: async () => new Response("{}") });
   await withBoundServer(app, async (client) => {
     await client.post("/api/schedules/create")
-      .send({ name: "Beds", days: [0, 6], startTime: "07:15", tasks: [{ zones: [6, 8], runTime: 20 }] })
+      .send({ requestId: "schedule-create-api-0001", name: "Beds", days: [0, 6], startTime: "07:15", tasks: [{ zones: [6, 8], runTime: 20 }] })
       .expect(201);
     let saved = JSON.parse(await fs.readFile(dataPath, "utf8"));
     const id = Object.keys(saved.schedules)[0];

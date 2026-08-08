@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import http from "node:http";
 import test from "node:test";
 import request from "supertest";
 
@@ -36,6 +37,23 @@ function validSchedule(i = 1) {
     startTime: "06:30",
     tasks: [{ zones: [1, 8], runTime: 12 }],
   };
+}
+
+function scheduleCreate(i = 1, requestId = `schedule-create-${String(i).padStart(4, "0")}`) {
+  return { requestId, ...validSchedule(i) };
+}
+
+async function listen(server) {
+  server.listen(0, "127.0.0.1");
+  await new Promise((resolve, reject) => {
+    server.once("listening", resolve);
+    server.once("error", reject);
+  });
+  return `http://127.0.0.1:${server.address().port}`;
+}
+
+async function close(server) {
+  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 }
 
 function committedThenLostController() {
@@ -118,6 +136,85 @@ test("manual request id rejects payload reuse and successful duplicate returns o
   });
 });
 
+test("schedule create atomically deduplicates concurrent and restarted requests and rejects key conflicts", async () => {
+  const dataPath = await tempDataPath();
+  const payload = scheduleCreate(41, "schedule-create-concurrent-0001");
+  const first = await createApp({ dataPath, controllerFetch: successfulController().fetch });
+  await withBoundServer(first.app, async (client) => {
+    const responses = await Promise.all(Array.from({ length: 8 }, () => client.post("/api/schedules/create").send(payload)));
+    assert.equal(responses.filter((response) => response.status === 201).length, 1);
+    assert.ok(responses.every((response) => [200, 201].includes(response.status)));
+    assert.equal(new Set(responses.map((response) => response.body.id)).size, 1);
+  });
+
+  const restarted = await createApp({ dataPath, controllerFetch: successfulController().fetch });
+  await withBoundServer(restarted.app, async (client) => {
+    const replay = await client.post("/api/schedules/create").send(payload).expect(200);
+    const operation = await client.get(`/api/operations/${payload.requestId}`).expect(200);
+    assert.equal(operation.body.scheduleId, replay.body.id);
+    await client.post("/api/schedules/create").send({ ...payload, name: "Different semantic payload" }).expect(409);
+    for (const requestId of [undefined, "short", "__proto__", "unsafe/id", "constructor"]) {
+      const invalid = { ...validSchedule(7), ...(requestId === undefined ? {} : { requestId }) };
+      await client.post("/api/schedules/create").send(invalid).expect(400);
+    }
+    const schedules = await client.get("/api/schedules").expect(200);
+    assert.equal(Object.keys(schedules.body).length, 1);
+  });
+
+  const stored = JSON.parse(await fs.readFile(dataPath, "utf8"));
+  assert.equal(Object.keys(stored.schedules).length, 1);
+  assert.equal(stored.operations[payload.requestId].type, "schedule-create");
+  assert.equal(stored.operations[payload.requestId].state, "completed");
+  assert.match(stored.operations[payload.requestId].payloadHash, /^[a-f0-9]{64}$/);
+  assert.ok(stored.schedules[stored.operations[payload.requestId].scheduleId]);
+});
+
+test("schedule create reconciles a causal committed lost response and never resurrects an updated or deleted result", async () => {
+  const dataPath = await tempDataPath();
+  const payload = scheduleCreate(42, "schedule-create-lost-response-0001");
+  const first = await createApp({ dataPath, controllerFetch: successfulController().fetch });
+  const upstream = http.createServer(first.app);
+  const upstreamUrl = await listen(upstream);
+  const proxy = http.createServer(async (req, res) => {
+    const body = [];
+    for await (const chunk of req) body.push(chunk);
+    const response = await fetch(`${upstreamUrl}${req.url}`, {
+      method: req.method,
+      headers: { "Content-Type": req.headers["content-type"] ?? "application/json" },
+      body: Buffer.concat(body),
+    });
+    await response.arrayBuffer();
+    res.socket.destroy();
+  });
+  const proxyUrl = await listen(proxy);
+  await assert.rejects(fetch(`${proxyUrl}/api/schedules/create`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }));
+  await close(proxy);
+  await close(upstream);
+
+  const restarted = await createApp({ dataPath, controllerFetch: successfulController().fetch });
+  await withBoundServer(restarted.app, async (client) => {
+    const operation = await client.get(`/api/operations/${payload.requestId}`).expect(200);
+    const scheduleId = operation.body.scheduleId;
+    assert.match(scheduleId, /^[A-Za-z0-9-]+$/);
+    assert.equal((await client.post("/api/schedules/create").send(payload).expect(200)).body.id, scheduleId);
+
+    await client.put("/api/schedules/update").send({ id: scheduleId, ...validSchedule(99), enabled: false }).expect(200);
+    assert.equal((await client.get(`/api/operations/${payload.requestId}`).expect(200)).body.scheduleId, scheduleId);
+    await client.post("/api/history/create").send({ zones: [1], event: "Started", reason: "Schedule" }).expect(201);
+    await client.delete("/api/schedules/delete").send({ id: scheduleId, requestId: "schedule-delete-created-0001" }).expect(201);
+    assert.equal((await client.get(`/api/operations/${payload.requestId}`).expect(200)).body.scheduleId, scheduleId);
+    assert.equal((await client.post("/api/schedules/create").send(payload).expect(200)).body.id, scheduleId);
+    assert.equal(Object.keys((await client.get("/api/schedules").expect(200)).body).length, 0);
+    const history = await client.get("/api/history").expect(200);
+    assert.equal(history.body.length, 1);
+    assert.equal(history.body[0].reason, "Schedule");
+  });
+});
+
 test("scheduled watering claims one durable operation before overlapping or lost-response execution", async () => {
   const now = new Date(2026, 7, 8, 6, 30, 5);
   const schedule = { ...validSchedule(1), days: [now.getDay()], enabled: true, lastRun: null };
@@ -168,13 +265,13 @@ test("mutation schemas reject invalid types, bounds, duplicates, inherited ids a
     { requestId: "request-extra-field", zones: [1], runTime: 5, retry: true },
   ];
   const invalidSchedules = [
-    { ...validSchedule(), days: [1, 1] },
-    { ...validSchedule(), days: [7] },
-    { ...validSchedule(), startTime: "24:00" },
-    { ...validSchedule(), tasks: [] },
-    { ...validSchedule(), tasks: [{ zones: [1, 1], runTime: 5 }] },
-    { ...validSchedule(), tasks: [{ zones: [1], runTime: 5, hidden: true }] },
-    { ...validSchedule(), name: "" },
+    { ...scheduleCreate(), days: [1, 1] },
+    { ...scheduleCreate(), days: [7] },
+    { ...scheduleCreate(), startTime: "24:00" },
+    { ...scheduleCreate(), tasks: [] },
+    { ...scheduleCreate(), tasks: [{ zones: [1, 1], runTime: 5 }] },
+    { ...scheduleCreate(), tasks: [{ zones: [1], runTime: 5, hidden: true }] },
+    { ...scheduleCreate(), name: "" },
   ];
   await withBoundServer(app, async (client) => {
     for (const body of invalidTasks) await client.post("/api/tasks/create").send(body).expect(400);
@@ -190,7 +287,7 @@ test("serialized atomic repository preserves 48 concurrent acknowledged writes a
   const controller = successfulController();
   const one = await createApp({ dataPath, controllerFetch: controller.fetch });
   const creates = await withBoundServer(one.app, (client) => Promise.all(Array.from({ length: 48 }, (_, i) =>
-    client.post("/api/schedules/create").send(validSchedule(i)).expect(201)
+    client.post("/api/schedules/create").send(scheduleCreate(i)).expect(201)
   )));
   assert.equal(new Set(creates.map((response) => response.body.id)).size, 48);
 
@@ -275,7 +372,7 @@ test("demo instances own unique private stores, recover missing files and clean 
   assert.equal((await fs.stat(path.dirname(a.dataPath))).mode & 0o077, 0);
   await withBoundServer(a.app, async (aClient) => {
     await withBoundServer(b.app, async (bClient) => {
-      await aClient.post("/api/schedules/create").send(validSchedule(1)).expect(201);
+      await aClient.post("/api/schedules/create").send(scheduleCreate(1)).expect(201);
       assert.equal(Object.keys((await bClient.get("/api/schedules")).body).length, 0);
       await fs.rm(a.dataPath);
       await aClient.get("/api/schedules").expect(200);
@@ -291,9 +388,9 @@ test("same-origin policy rejects cross-site mutations and security/cache headers
   const dataPath = await tempDataPath();
   const { app } = await createApp({ dataPath, controllerFetch: successfulController().fetch });
   await withBoundServer(app, async (client) => {
-    await client.post("/api/schedules/create").set("Origin", "https://evil.invalid").set("Host", "yard.local").send(validSchedule()).expect(403);
-    await client.post("/api/schedules/create").set("Sec-Fetch-Site", "cross-site").send(validSchedule()).expect(403);
-    await client.post("/api/schedules/create").set("Origin", "http://yard.local").set("Host", "yard.local").send(validSchedule()).expect(201);
+    await client.post("/api/schedules/create").set("Origin", "https://evil.invalid").set("Host", "yard.local").send(scheduleCreate()).expect(403);
+    await client.post("/api/schedules/create").set("Sec-Fetch-Site", "cross-site").send(scheduleCreate()).expect(403);
+    await client.post("/api/schedules/create").set("Origin", "http://yard.local").set("Host", "yard.local").send(scheduleCreate()).expect(201);
 
     const page = await client.get("/").expect(200);
     assert.equal(page.headers["x-powered-by"], undefined);

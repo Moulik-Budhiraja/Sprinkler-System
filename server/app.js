@@ -75,6 +75,7 @@ function operationPublic(operation) {
     outcome: operation.state === "outcome_unknown" ? "unknown" : operation.state,
     createdAt: operation.createdAt,
     updatedAt: operation.updatedAt,
+    scheduleId: operation.type === "schedule-create" ? operation.scheduleId : undefined,
     recovery: operation.state === "outcome_unknown"
       ? "Outcome unknown. Check controller status before taking another action. This request will not be sent again."
       : undefined,
@@ -185,10 +186,38 @@ export async function createApp(options = {}) {
 
   app.post("/api/schedules/create", wrap(async (req, res) => {
     const parsed = scheduleCreateBody(req.body);
-    const id = uuid4();
-    const schedule = { ...parsed, lastRun: null, enabled: true };
-    await repository.mutate((data) => { data.schedules[id] = schedule; });
-    res.status(201).json({ id, ...schedule });
+    const { requestId, ...semanticPayload } = parsed;
+    const payloadHash = digest(semanticPayload);
+    const result = await repository.mutate((data) => {
+      const prior = data.operations[requestId];
+      if (prior) {
+        return prior.type === "schedule-create" && prior.payloadHash === payloadHash
+          ? { prior, schedule: data.schedules[prior.scheduleId] }
+          : { conflict: true };
+      }
+      const id = uuid4();
+      const schedule = { ...semanticPayload, lastRun: null, enabled: true };
+      const now = Date.now();
+      data.schedules[id] = schedule;
+      data.operations[requestId] = {
+        id: requestId,
+        type: "schedule-create",
+        payloadHash,
+        scheduleId: id,
+        state: "completed",
+        createdAt: now,
+        updatedAt: now,
+      };
+      return { operation: data.operations[requestId], schedule };
+    });
+    if (result.conflict) return res.status(409).json({ error: "requestId was already used for another operation" });
+    const operation = result.prior ?? result.operation;
+    res.status(result.prior ? 200 : 201).json({
+      id: operation.scheduleId,
+      ...(result.schedule ?? {}),
+      operationId: operation.id,
+      state: operation.state,
+    });
   }));
 
   app.put("/api/schedules/update", wrap(async (req, res) => {

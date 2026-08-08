@@ -90,8 +90,14 @@ export function manualTaskBody(body) {
 
 export function scheduleCreateBody(body) {
   object(body);
-  exactKeys(body, ["name", "days", "startTime", "tasks"]);
-  return { name: name(body.name), days: days(body.days), startTime: time(body.startTime), tasks: tasks(body.tasks) };
+  exactKeys(body, ["requestId", "name", "days", "startTime", "tasks"]);
+  return {
+    requestId: safeId(body.requestId, "requestId", { min: 8 }),
+    name: name(body.name),
+    days: days(body.days),
+    startTime: time(body.startTime),
+    tasks: tasks(body.tasks),
+  };
 }
 
 export function scheduleUpdateBody(body) {

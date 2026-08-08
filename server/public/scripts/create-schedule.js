@@ -63,26 +63,125 @@ document.getElementById("addTaskBtn").addEventListener("click", () => {
   renderTasks();
 });
 
-document.getElementById("saveBtn").addEventListener("click", async (event) => {
-  const button = event.currentTarget;
-  const payload = {
+let pendingSubmission = null;
+const PENDING_STORAGE_KEY = "sprinkler.pendingScheduleCreate.v1";
+const saveButton = document.getElementById("saveBtn");
+
+function clearPendingSubmission() {
+  pendingSubmission = null;
+  sessionStorage.removeItem(PENDING_STORAGE_KEY);
+}
+
+function rememberPendingSubmission(submission) {
+  pendingSubmission = submission;
+  sessionStorage.setItem(PENDING_STORAGE_KEY, JSON.stringify(submission));
+}
+
+function setFormLocked(locked) {
+  for (const control of document.querySelectorAll(".editor-form input, .editor-form button:not(#saveBtn)")) control.disabled = locked;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function reconcileScheduleCreate(submission) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      const response = await fetch(`/api/operations/${encodeURIComponent(submission.requestId)}`, { cache: "no-store" });
+      if (response.ok) {
+        const operation = await response.json();
+        if (operation.type === "schedule-create" && operation.state === "completed" && operation.scheduleId) {
+          clearPendingSubmission();
+          feedback.textContent = "Saved";
+          window.location.assign("/schedules");
+          return;
+        }
+      } else if (response.status !== 404) {
+        await response.json().catch(() => ({}));
+      }
+    } catch {}
+    if (attempt < 3) await delay(250);
+  }
+  feedback.textContent = "Outcome unknown · no committed result confirmed. Retry save uses the same request.";
+  saveButton.textContent = "Retry save";
+  saveButton.disabled = false;
+}
+
+async function submitSchedule(submission) {
+  saveButton.disabled = true;
+  saveButton.textContent = "Save schedule";
+  feedback.textContent = "Saving";
+  try {
+    const response = await fetch("/api/schedules/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(submission),
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      const error = new Error(body.error || "Save failed");
+      error.definitive = true;
+      throw error;
+    }
+    clearPendingSubmission();
+    feedback.textContent = "Saved";
+    window.location.assign("/schedules");
+  } catch (error) {
+    if (error.definitive) {
+      clearPendingSubmission();
+      setFormLocked(false);
+      saveButton.disabled = false;
+      feedback.textContent = error.message;
+      return;
+    }
+    setFormLocked(true);
+    feedback.textContent = "Outcome unknown · checking the durable save result before another action.";
+    await reconcileScheduleCreate(submission);
+  }
+}
+
+saveButton.addEventListener("click", async () => {
+  if (pendingSubmission) {
+    await submitSchedule(pendingSubmission);
+    return;
+  }
+  const semanticPayload = {
     name: document.getElementById("scheduleName").value.trim(),
     days: Array.from({ length: 7 }, (_, day) => day).filter((day) => document.getElementById(`day${day}`).checked),
     startTime: document.getElementById("startTime").value,
-    tasks,
+    tasks: structuredClone(tasks),
   };
-  if (!payload.name || !payload.days.length || !payload.startTime || !tasks.length) {
+  if (!semanticPayload.name || !semanticPayload.days.length || !semanticPayload.startTime || !semanticPayload.tasks.length) {
     feedback.textContent = "Complete name, time, days and sequence";
     return;
   }
-  button.disabled = true;
-  feedback.textContent = "Saving";
-  try {
-    const response = await fetch("/api/schedules/create", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-    if (!response.ok) throw new Error((await response.json()).error || "Save failed");
-    window.location.assign("/schedules");
-  } catch (error) {
-    button.disabled = false;
-    feedback.textContent = error.message;
-  }
+  rememberPendingSubmission({ requestId: crypto.randomUUID(), ...semanticPayload });
+  await submitSchedule(pendingSubmission);
 });
+
+function restorePendingSubmission() {
+  let restored;
+  try {
+    restored = JSON.parse(sessionStorage.getItem(PENDING_STORAGE_KEY));
+  } catch {
+    sessionStorage.removeItem(PENDING_STORAGE_KEY);
+    return;
+  }
+  if (!restored || typeof restored.requestId !== "string" || typeof restored.name !== "string" ||
+      !Array.isArray(restored.days) || typeof restored.startTime !== "string" || !Array.isArray(restored.tasks)) {
+    sessionStorage.removeItem(PENDING_STORAGE_KEY);
+    return;
+  }
+  pendingSubmission = restored;
+  document.getElementById("scheduleName").value = restored.name;
+  document.getElementById("startTime").value = restored.startTime;
+  for (let day = 0; day < 7; day += 1) document.getElementById(`day${day}`).checked = restored.days.includes(day);
+  tasks.splice(0, tasks.length, ...structuredClone(restored.tasks));
+  renderTasks();
+  setFormLocked(true);
+  feedback.textContent = "Outcome unknown · checking the durable save result before another action.";
+  void reconcileScheduleCreate(restored);
+}
+
+restorePendingSubmission();
