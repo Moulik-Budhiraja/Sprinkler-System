@@ -28,6 +28,21 @@ const MUTATION_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 class ControllerError extends Error {}
 class ControllerRejectedError extends ControllerError {}
 class AmbiguousControllerError extends ControllerError {}
+class ControllerCapacityError extends ControllerError {
+  constructor(message = "controller work capacity is unavailable") {
+    super(message);
+    this.code = "CONTROLLER_OVERLOADED";
+  }
+}
+
+function normalizedPublicOrigin(value) {
+  const parsed = new URL(value);
+  if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password ||
+      parsed.pathname !== "/" || parsed.search || parsed.hash) {
+    throw new Error("publicOrigin must be an HTTP(S) origin without credentials, path, query, or fragment");
+  }
+  return parsed.origin;
+}
 
 export function createSyntheticController(now = () => Math.floor(Date.now() / 1000)) {
   let nextId = 1;
@@ -39,11 +54,13 @@ export function createSyntheticController(now = () => Math.floor(Date.now() / 10
   };
 
   return async (url, init = {}) => {
+    init.signal?.throwIfAborted();
     const parsed = new URL(url, "http://synthetic.invalid");
     if (parsed.pathname === "/tasks" && !init.method) return Response.json({ tasks: state.tasks });
     if (parsed.pathname === "/tasks/add") {
       const body = JSON.parse(init.body);
       for (const task of body.tasks) {
+        init.signal?.throwIfAborted();
         state.tasks.push({
           id: `demo-${nextId++}`,
           zones: task.zones,
@@ -54,6 +71,7 @@ export function createSyntheticController(now = () => Math.floor(Date.now() / 10
       return Response.json({ success: true });
     }
     if (parsed.pathname === "/tasks/delete") {
+      init.signal?.throwIfAborted();
       const id = parsed.searchParams.get("id");
       const existed = state.tasks.some((entry) => entry.id === id);
       state.tasks = state.tasks.filter((entry) => entry.id !== id);
@@ -117,32 +135,110 @@ export async function createApp(options = {}) {
   const controllerHost = options.controllerHost ?? `http://${process.env.MICROCONTROLLER_HOST}`;
   const controllerFetch = demo ? createSyntheticController() : options.controllerFetch ?? ((url, init) => fetch(url, init));
   const controllerTimeoutMs = options.controllerTimeoutMs ?? 4000;
+  const controllerMaxConcurrent = options.controllerMaxConcurrent ?? 8;
+  const controllerShutdownDrainMs = options.controllerShutdownDrainMs ?? 1000;
+  if (!Number.isInteger(controllerMaxConcurrent) || controllerMaxConcurrent < 1) {
+    throw new TypeError("controllerMaxConcurrent must be a positive integer");
+  }
+  const configuredPublicOrigin = options.publicOrigin ?? process.env.SPRINKLER_PUBLIC_ORIGIN;
+  const publicOrigin = configuredPublicOrigin ? normalizedPublicOrigin(configuredPublicOrigin) : null;
+  const controllerLeases = new Set();
+  let controllerShuttingDown = false;
 
-  async function controllerRequest(pathname, init = undefined, mutation = false) {
-    let timer;
-    let response;
-    try {
-      response = await Promise.race([
-        controllerFetch(controllerHost + pathname, init),
-        new Promise((_, reject) => {
-          timer = setTimeout(() => reject(new Error("deadline exceeded")), controllerTimeoutMs);
-        }),
-      ]);
-    } catch (error) {
-      throw new AmbiguousControllerError(`controller outcome unknown: ${error.message}`);
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!response?.ok) {
-      const ErrorType = mutation ? AmbiguousControllerError : ControllerRejectedError;
-      throw new ErrorType(`controller ${mutation ? "outcome unknown" : "rejected request"} (${response?.status ?? "invalid response"})`);
-    }
-    try {
-      return await response.json();
-    } catch (error) {
-      const ErrorType = mutation ? AmbiguousControllerError : ControllerRejectedError;
-      throw new ErrorType(`controller ${mutation ? "outcome unknown" : "returned invalid data"}: ${error.message}`);
-    }
+  function acquireControllerLease() {
+    if (controllerShuttingDown || controllerLeases.size >= controllerMaxConcurrent) return null;
+    const lease = {
+      abortController: null,
+      activePromise: null,
+      releaseRequested: false,
+      released: false,
+      async execute(pathname, init = undefined, mutation = false, retain = false) {
+        if (lease.released || lease.activePromise) throw new Error("invalid controller lease state");
+        const abortController = new AbortController();
+        lease.abortController = abortController;
+        let timer;
+        let deadlineReject;
+        const deadline = new Promise((_, reject) => { deadlineReject = reject; });
+        const work = (async () => {
+          const response = await controllerFetch(controllerHost + pathname, { ...(init ?? {}), signal: abortController.signal });
+          if (!response?.ok) {
+            const ErrorType = mutation ? AmbiguousControllerError : ControllerRejectedError;
+            throw new ErrorType(`controller ${mutation ? "outcome unknown" : "rejected request"} (${response?.status ?? "invalid response"})`);
+          }
+          try {
+            return await response.json();
+          } catch (error) {
+            const ErrorType = mutation ? AmbiguousControllerError : ControllerRejectedError;
+            throw new ErrorType(`controller ${mutation ? "outcome unknown" : "returned invalid data"}: ${error.message}`);
+          }
+        })();
+        lease.activePromise = work;
+        const settled = work.then(
+          (value) => ({ ok: true, value }),
+          (error) => ({ ok: false, error }),
+        ).finally(() => {
+          lease.activePromise = null;
+          lease.abortController = null;
+          if (lease.releaseRequested) {
+            lease.released = true;
+            controllerLeases.delete(lease);
+          }
+        });
+        timer = setTimeout(() => {
+          lease.releaseRequested = true;
+          const error = new Error("deadline exceeded");
+          abortController.abort(error);
+          deadlineReject(error);
+        }, controllerTimeoutMs);
+        try {
+          const result = await Promise.race([
+            settled.then((outcome) => {
+              if (!outcome.ok) throw outcome.error;
+              return outcome.value;
+            }),
+            deadline,
+          ]);
+          if (!retain) lease.release();
+          return result;
+        } catch (error) {
+          lease.release();
+          if (error instanceof ControllerError) throw error;
+          throw new AmbiguousControllerError(`controller outcome unknown: ${error.message}`);
+        } finally {
+          clearTimeout(timer);
+        }
+      },
+      release(reason = undefined) {
+        if (lease.released) return;
+        lease.releaseRequested = true;
+        if (reason && lease.abortController && !lease.abortController.signal.aborted) lease.abortController.abort(reason);
+        if (!lease.activePromise) {
+          lease.released = true;
+          controllerLeases.delete(lease);
+        }
+      },
+    };
+    controllerLeases.add(lease);
+    return lease;
+  }
+
+  function requireControllerLease() {
+    const lease = acquireControllerLease();
+    if (!lease) throw new ControllerCapacityError();
+    return lease;
+  }
+
+  async function controllerRequest(pathname, init = undefined, mutation = false, suppliedLease = null, retain = false) {
+    const lease = suppliedLease ?? requireControllerLease();
+    return lease.execute(pathname, init, mutation, retain);
+  }
+
+  function controllerWorkState() {
+    return {
+      activeCalls: [...controllerLeases].filter((lease) => lease.activePromise).length,
+      admitted: controllerLeases.size,
+      shuttingDown: controllerShuttingDown,
+    };
   }
 
   const app = express();
@@ -167,7 +263,10 @@ export async function createApp(options = {}) {
     const origin = req.get("Origin");
     if (origin) {
       try {
-        if (new URL(origin).host !== req.get("Host")) return res.status(403).json({ error: "origin denied" });
+        const requestOrigin = new URL(origin).origin;
+        const directScheme = req.socket.encrypted ? "https" : "http";
+        const expectedOrigin = publicOrigin ?? normalizedPublicOrigin(`${directScheme}://${req.get("Host")}`);
+        if (requestOrigin !== expectedOrigin) return res.status(403).json({ error: "origin denied" });
       } catch {
         return res.status(403).json({ error: "origin denied" });
       }
@@ -281,16 +380,35 @@ export async function createApp(options = {}) {
     const parsed = manualTaskBody(req.body);
     const payload = { zones: parsed.zones, runTime: parsed.runTime };
     const payloadHash = digest(payload);
-    const claim = await repository.mutate((data) => {
-      const prior = data.operations[parsed.requestId];
-      if (prior) return operationMatches(prior, parsed.requestId, "manual-start", payloadHash) ? { prior } : { conflict: true };
-      const now = Date.now();
-      const operation = { id: parsed.requestId, type: "manual-start", payloadHash, state: "pending", createdAt: now, updatedAt: now };
-      data.operations[parsed.requestId] = operation;
-      return { operation };
-    });
-    if (claim.conflict) return res.status(409).json({ error: "requestId was already used for another operation" });
+    const preflight = (await repository.read()).operations[parsed.requestId];
+    if (preflight) {
+      if (!operationMatches(preflight, parsed.requestId, "manual-start", payloadHash)) {
+        return res.status(409).json({ error: "requestId was already used for another operation" });
+      }
+      const status = preflight.state === "completed" ? 200 : preflight.state === "rejected" ? 502 : 202;
+      return res.status(status).json(operationPublic(preflight));
+    }
+    const controllerLease = requireControllerLease();
+    let claim;
+    try {
+      claim = await repository.mutate((data) => {
+        const prior = data.operations[parsed.requestId];
+        if (prior) return operationMatches(prior, parsed.requestId, "manual-start", payloadHash) ? { prior } : { conflict: true };
+        const now = Date.now();
+        const operation = { id: parsed.requestId, type: "manual-start", payloadHash, state: "pending", createdAt: now, updatedAt: now };
+        data.operations[parsed.requestId] = operation;
+        return { operation };
+      });
+    } catch (error) {
+      controllerLease.release();
+      throw error;
+    }
+    if (claim.conflict) {
+      controllerLease.release();
+      return res.status(409).json({ error: "requestId was already used for another operation" });
+    }
     if (claim.prior) {
+      controllerLease.release();
       const status = claim.prior.state === "completed" ? 200 : claim.prior.state === "rejected" ? 502 : 202;
       return res.status(status).json(operationPublic(claim.prior));
     }
@@ -300,7 +418,7 @@ export async function createApp(options = {}) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tasks: [payload] }),
-      }, true);
+      }, true, controllerLease);
       await options.afterControllerContact?.({ repository, type: "manual-start", requestId: parsed.requestId });
       const completed = await repository.mutate((data) => {
         const operation = data.operations[parsed.requestId];
@@ -336,25 +454,45 @@ export async function createApp(options = {}) {
   app.delete("/api/tasks/delete", wrap(async (req, res) => {
     const parsed = deleteBody(req.body, { requestId: true });
     const payloadHash = digest({ id: parsed.id });
-    const claim = await repository.mutate((data) => {
-      const prior = data.operations[parsed.requestId];
-      if (prior) return operationMatches(prior, parsed.requestId, "task-delete", payloadHash) ? { prior } : { conflict: true };
-      const now = Date.now();
-      const operation = { id: parsed.requestId, type: "task-delete", payloadHash, state: "pending", createdAt: now, updatedAt: now };
-      data.operations[parsed.requestId] = operation;
-      return { operation };
-    });
-    if (claim.conflict) return res.status(409).json({ error: "requestId was already used for another operation" });
+    const preflight = (await repository.read()).operations[parsed.requestId];
+    if (preflight) {
+      if (!operationMatches(preflight, parsed.requestId, "task-delete", payloadHash)) {
+        return res.status(409).json({ error: "requestId was already used for another operation" });
+      }
+      const status = preflight.state === "completed" ? 200 : preflight.state === "rejected" ? 502 : 202;
+      return res.status(status).json(operationPublic(preflight));
+    }
+    const controllerLease = requireControllerLease();
+    let claim;
+    try {
+      claim = await repository.mutate((data) => {
+        const prior = data.operations[parsed.requestId];
+        if (prior) return operationMatches(prior, parsed.requestId, "task-delete", payloadHash) ? { prior } : { conflict: true };
+        const now = Date.now();
+        const operation = { id: parsed.requestId, type: "task-delete", payloadHash, state: "pending", createdAt: now, updatedAt: now };
+        data.operations[parsed.requestId] = operation;
+        return { operation };
+      });
+    } catch (error) {
+      controllerLease.release();
+      throw error;
+    }
+    if (claim.conflict) {
+      controllerLease.release();
+      return res.status(409).json({ error: "requestId was already used for another operation" });
+    }
     if (claim.prior) {
+      controllerLease.release();
       const status = claim.prior.state === "completed" ? 200 : claim.prior.state === "rejected" ? 502 : 202;
       return res.status(status).json(operationPublic(claim.prior));
     }
 
     let task;
     try {
-      const current = await controllerRequest("/tasks");
+      const current = await controllerRequest("/tasks", undefined, false, controllerLease, true);
       task = current.tasks.find((entry) => String(entry.id) === parsed.id);
     } catch (error) {
+      controllerLease.release();
       const operation = await repository.mutate((data) => {
         const currentOperation = data.operations[parsed.requestId];
         currentOperation.state = "rejected";
@@ -364,6 +502,7 @@ export async function createApp(options = {}) {
       return res.status(error instanceof ControllerRejectedError ? 502 : 503).json({ ...operationPublic(operation), error: "Could not read controller task state; no Stop command was sent." });
     }
     if (!task) {
+      controllerLease.release();
       await repository.mutate((data) => {
         data.operations[parsed.requestId].state = "rejected";
         data.operations[parsed.requestId].updatedAt = Date.now();
@@ -371,7 +510,7 @@ export async function createApp(options = {}) {
       return res.status(404).json({ error: "task not found" });
     }
     try {
-      await controllerRequest(`/tasks/delete?id=${encodeURIComponent(parsed.id)}`, { method: "DELETE" }, true);
+      await controllerRequest(`/tasks/delete?id=${encodeURIComponent(parsed.id)}`, { method: "DELETE" }, true, controllerLease);
       await options.afterControllerContact?.({ repository, type: "task-delete", requestId: parsed.requestId });
       const operation = await repository.mutate((data) => {
         const currentOperation = data.operations[parsed.requestId];
@@ -430,25 +569,36 @@ export async function createApp(options = {}) {
       const occurrence = Math.floor(now.getTime() / 60000);
       for (const [id, schedule] of Object.entries(snapshot.schedules)) {
         if (!schedule.enabled || !schedule.days.includes(day) || schedule.startTime !== clock) continue;
+        const controllerLease = acquireControllerLease();
+        if (!controllerLease) continue;
         const operationId = `schedule:${id}:${occurrence}`;
         const payloadHash = digest(schedule.tasks);
-        const claimed = await repository.mutate((data) => {
-          if (data.operations[operationId]) return false;
-          const live = data.schedules[id];
-          if (!live || !live.enabled || !live.days.includes(day) || live.startTime !== clock) return false;
-          const timestamp = Math.floor(now.getTime() / 1000);
-          const createdAt = Date.now();
-          data.operations[operationId] = { id: operationId, type: "schedule-start", payloadHash, state: "pending", createdAt, updatedAt: createdAt };
-          live.lastRun = timestamp;
-          return true;
-        });
-        if (!claimed) continue;
+        let claimed;
+        try {
+          claimed = await repository.mutate((data) => {
+            if (data.operations[operationId]) return false;
+            const live = data.schedules[id];
+            if (!live || !live.enabled || !live.days.includes(day) || live.startTime !== clock) return false;
+            const timestamp = Math.floor(now.getTime() / 1000);
+            const createdAt = Date.now();
+            data.operations[operationId] = { id: operationId, type: "schedule-start", payloadHash, state: "pending", createdAt, updatedAt: createdAt };
+            live.lastRun = timestamp;
+            return true;
+          });
+        } catch (error) {
+          controllerLease.release();
+          throw error;
+        }
+        if (!claimed) {
+          controllerLease.release();
+          continue;
+        }
         try {
           await controllerRequest("/tasks/add", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ tasks: schedule.tasks }),
-          }, true);
+          }, true, controllerLease);
           await repository.mutate((data) => {
             const operation = data.operations[operationId];
             operation.state = "completed";
@@ -497,8 +647,25 @@ export async function createApp(options = {}) {
     for (const timer of timers) clearTimeout(timer);
     timers.clear();
   }
-  async function cleanup() {
+  function beginControllerShutdown() {
     stopBackgroundJobs();
+    if (controllerShuttingDown) return;
+    controllerShuttingDown = true;
+    const shutdownError = new Error("server shutting down");
+    for (const lease of controllerLeases) lease.release(shutdownError);
+  }
+  async function cleanup() {
+    beginControllerShutdown();
+    const draining = [...controllerLeases]
+      .map((lease) => lease.activePromise)
+      .filter(Boolean)
+      .map((work) => Promise.resolve(work).catch(() => {}));
+    if (draining.length) {
+      await Promise.race([
+        Promise.allSettled(draining),
+        new Promise((resolve) => setTimeout(resolve, controllerShutdownDrainMs)),
+      ]);
+    }
     if (ownedDemoDir) {
       const owned = ownedDemoDir;
       ownedDemoDir = null;
@@ -512,10 +679,10 @@ export async function createApp(options = {}) {
     if (err instanceof SyntaxError && err.status === 400 && "body" in err) return res.status(400).json({ error: "malformed JSON" });
     if (err instanceof ControllerRejectedError) return res.status(502).json({ error: err.message });
     if (err instanceof AmbiguousControllerError) return res.status(503).json({ error: "controller outcome unknown", recovery: "Check controller status before retrying." });
-    if (err?.code === "REPOSITORY_OVERLOADED") {
+    if (err?.code === "REPOSITORY_OVERLOADED" || err?.code === "CONTROLLER_OVERLOADED") {
       res.set("Retry-After", "1");
       return res.status(503).json({
-        error: "datastore busy",
+        error: err.code === "CONTROLLER_OVERLOADED" ? "controller work capacity unavailable" : "datastore busy",
         outcome: "not_applied",
         requestId: typeof req.body?.requestId === "string" ? req.body.requestId : undefined,
         recovery: "Not applied. Retry this same requestId after the indicated delay.",
@@ -525,7 +692,7 @@ export async function createApp(options = {}) {
     res.status(500).json({ error: "internal error" });
   });
 
-  return { app, dataPath, demo, repository, refreshActiveZones, runScheduleTick, startBackgroundJobs, stopBackgroundJobs, cleanup };
+  return { app, dataPath, demo, repository, refreshActiveZones, runScheduleTick, startBackgroundJobs, stopBackgroundJobs, beginControllerShutdown, controllerWorkState, cleanup };
 }
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
@@ -537,8 +704,12 @@ if (isMain) {
   const server = instance.app.listen(port, host, () => {
     console.log(`Sprinkler Webserver listening on http://${host}:${port}${instance.demo ? " (demo mode)" : ""}`);
   });
+  let shuttingDown = false;
   const shutdown = async () => {
-    server.close();
+    if (shuttingDown) return;
+    shuttingDown = true;
+    instance.beginControllerShutdown();
+    await new Promise((resolve) => server.close(resolve));
     await instance.cleanup();
   };
   process.once("SIGTERM", shutdown);
