@@ -1,4 +1,4 @@
-const ZONE_COUNT = 8;
+const ZONE_COUNT = 6;
 
 function buildZoneGrid(containerId) {
   const grid = document.getElementById(containerId);
@@ -59,14 +59,14 @@ startBtn.addEventListener("click", async () => {
   startBtn.textContent = "Starting…";
 
   try {
-    await fetch("/api/tasks/create", {
+    const response = await fetch("/api/tasks/create", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ zones, runTime: duration }),
     });
+    if (!response.ok) throw new Error(`Task request failed (${response.status})`);
     window.location.href = "/";
-  } catch (err) {
-    console.error(err);
+  } catch {
     startBtn.disabled = false;
     startBtn.textContent = "Something went wrong — retry";
   }

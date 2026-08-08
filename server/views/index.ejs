@@ -1,81 +1,39 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-  <head>
-    <%- include("partials/head", { title: "Verdant — Irrigation Control" }) %>
-    <script src="/scripts/index.js" defer></script>
-  </head>
-  <body>
-    <%- include("partials/topbar", { active: "home" }) %>
+<head>
+  <%- include("partials/head", { title: "Living Yard — Sprinkler system" }) %>
+  <script src="/scripts/field.js" defer></script>
+  <script src="/scripts/index.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to main content</a>
+  <%- include("partials/topbar", { active: "home" }) %>
+  <main id="main" class="shell dashboard">
+    <section class="qt" data-dashboard-section="quick-task" data-testid="quick-task" aria-labelledby="quickTaskHeading">
+      <form id="quickTaskForm">
+        <div class="qt-row">
+          <h1 class="qt-heading" id="quickTaskHeading" data-testid="quick-task-heading">Quick Task</h1>
+          <fieldset class="qt-zones"><legend class="sr-only">Zones</legend><div id="quickZones" class="qt-zones"></div></fieldset>
+          <span class="qt-sep" aria-hidden="true"></span>
+          <fieldset class="qt-durations"><legend class="sr-only">Duration</legend><div id="quickDurations" class="qt-durations"></div></fieldset>
+          <button class="qt-start" type="submit">Start</button>
+        </div>
+        <output id="quickMessage" class="qt-feedback" aria-live="polite"></output>
+      </form>
+    </section>
 
-    <main class="shell">
-      <section class="hero reveal d1">
-        <p class="hero__eyebrow">Live System</p>
-        <h1>Good day in the <em>garden</em>.</h1>
-        <p class="hero__lead">
-          Monitor every zone, fire off a quick soak, and keep your schedules
-          running like clockwork — all from one calm console.
-        </p>
+    <section id="sprinklerField" class="field" data-dashboard-section="field" data-testid="field" aria-label="Sprinkler field"></section>
 
-        <div class="statusline" id="statusline">
-          <div class="stat">
-            <span class="stat__dot idle" id="sysDot"></span>
-            <span class="stat__label">System</span>
-            <span class="stat__value" id="sysValue">Connecting…</span>
-          </div>
-          <div class="stat">
-            <span class="stat__dot water idle" id="zoneDot"></span>
-            <span class="stat__label">Watering</span>
-            <span class="stat__value" id="zoneValue">—</span>
-          </div>
-          <div class="stat">
-            <span class="stat__dot idle"></span>
-            <span class="stat__label">Schedules</span>
-            <span class="stat__value" id="schedValue">—</span>
-          </div>
-        </div>
-      </section>
+    <section class="section-block" data-dashboard-section="schedules" aria-labelledby="schedulesHeading">
+      <header class="section-head"><h2 id="schedulesHeading">Schedules</h2><a href="/schedules">All schedules</a></header>
+      <div id="schedules" class="schedule-list" aria-live="polite"><p class="empty">No schedules</p></div>
+    </section>
 
-      <!-- ZONE MAP -->
-      <section class="section reveal d2">
-        <div class="section__head">
-          <h2>Zones <span class="section__count" id="zoneCount"></span></h2>
-        </div>
-        <div class="zonemap" id="zonemap"></div>
-      </section>
-
-      <!-- CURRENT TASKS -->
-      <section class="section reveal d3">
-        <div class="section__head">
-          <h2>Running Now <span class="section__count" id="taskCount"></span></h2>
-          <a href="/quick-task"><button class="btn btn--water btn--sm">+ Quick Task</button></a>
-        </div>
-        <div class="card-grid" id="tasks">
-          <div class="empty">Connecting to controller…</div>
-        </div>
-      </section>
-
-      <!-- SCHEDULES -->
-      <section class="section reveal d4">
-        <div class="section__head">
-          <h2>Schedules <span class="section__count" id="schedCount"></span></h2>
-          <a href="/create-schedule"><button class="btn btn--primary btn--sm">+ New Schedule</button></a>
-        </div>
-        <div class="card-grid" id="schedules">
-          <div class="empty">Loading schedules…</div>
-        </div>
-      </section>
-
-      <!-- HISTORY -->
-      <section class="section reveal d5">
-        <div class="section__head">
-          <h2>History</h2>
-        </div>
-        <div class="panel" style="padding: 8px 22px">
-          <div class="timeline" id="history">
-            <div class="empty" style="border: none; background: none">Loading history…</div>
-          </div>
-        </div>
-      </section>
-    </main>
-  </body>
+    <section class="section-block" data-dashboard-section="history" aria-labelledby="historyHeading">
+      <header class="section-head"><h2 id="historyHeading">History</h2><a href="/activity">All activity</a></header>
+      <div id="history" class="history-list" aria-live="polite"><p class="empty">No history</p></div>
+    </section>
+  </main>
+  <nav class="mobile-nav" aria-label="Mobile navigation"><a class="active" href="/">Today</a><a href="/schedules">Schedules</a><a href="/activity">Activity</a><a href="/controller">Controller</a></nav>
+</body>
 </html>

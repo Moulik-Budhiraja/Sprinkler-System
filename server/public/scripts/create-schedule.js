@@ -1,4 +1,4 @@
-const ZONE_COUNT = 8;
+const ZONE_COUNT = 6;
 const DAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
 
 function buildZoneGrid(containerId) {
@@ -139,14 +139,14 @@ document.getElementById("saveBtn").addEventListener("click", async (e) => {
   btn.disabled = true;
   btn.textContent = "Saving…";
   try {
-    await fetch("/api/schedules/create", {
+    const response = await fetch("/api/schedules/create", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    window.location.href = "/";
-  } catch (err) {
-    console.error(err);
+    if (!response.ok) throw new Error(`Schedule request failed (${response.status})`);
+    window.location.href = "/schedules";
+  } catch {
     btn.disabled = false;
     btn.textContent = "Something went wrong — retry";
   }

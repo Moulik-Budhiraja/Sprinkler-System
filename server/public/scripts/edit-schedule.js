@@ -1,4 +1,4 @@
-const ZONE_COUNT = 8;
+const ZONE_COUNT = 6;
 const DAY_LABELS = ["S", "M", "T", "W", "T", "F", "S"];
 
 const urlParams = new URLSearchParams(window.location.search);
@@ -121,7 +121,10 @@ renderTasks();
 
 /* load existing schedule */
 fetch("/api/schedules")
-  .then((res) => res.json())
+  .then((res) => {
+    if (!res.ok) throw new Error(`Schedule request failed (${res.status})`);
+    return res.json();
+  })
   .then((schedules) => {
     const schedule = schedules[scheduleId];
     if (!schedule) {
@@ -147,7 +150,7 @@ fetch("/api/schedules")
 
     renderTasks();
   })
-  .catch((err) => console.error(err));
+  .catch(() => flash(document.getElementById("saveBtn"), "Schedule unavailable"));
 
 document.getElementById("saveBtn").addEventListener("click", async (e) => {
   const btn = e.currentTarget;
@@ -175,7 +178,7 @@ document.getElementById("saveBtn").addEventListener("click", async (e) => {
   btn.disabled = true;
   btn.textContent = "Saving…";
   try {
-    await fetch("/api/schedules/update", {
+    const response = await fetch("/api/schedules/update", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -187,9 +190,9 @@ document.getElementById("saveBtn").addEventListener("click", async (e) => {
         enabled: enabledState,
       }),
     });
-    window.location.href = "/";
-  } catch (err) {
-    console.error(err);
+    if (!response.ok) throw new Error(`Schedule request failed (${response.status})`);
+    window.location.href = "/schedules";
+  } catch {
     btn.disabled = false;
     btn.textContent = "Something went wrong — retry";
   }

@@ -1,373 +1,352 @@
 import express from "express";
 import bodyParser from "body-parser";
+import os from "os";
 import path from "path";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 import fs from "fs/promises";
-import { existsSync } from "fs";
 import { v4 as uuid4 } from "uuid";
 import { logHistory } from "./helpers.js";
 import { savePath } from "./constants.js";
 import dotenv from "dotenv";
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const app = express();
-const port = process.env.PORT || 5000;
+class ControllerError extends Error {}
 
-const microcontrollerHost = `http://${process.env.MICROCONTROLLER_HOST}`;
-
-if (existsSync(savePath)) {
-  console.log("Data file exists");
-} else {
-  console.log("Data file does not exist, creating...");
-
-  const data = {
-    schedules: {},
-    history: [],
+// Deterministic synthetic controller for demo/test mode. It holds tasks in
+// memory only and is structurally incapable of reaching hardware: it never
+// opens a socket, it just mimics the microcontroller's /tasks API surface.
+export function createSyntheticController(now = () => Math.floor(Date.now() / 1000)) {
+  let nextId = 1;
+  const state = {
+    tasks: [
+      { id: "demo-running", zones: [4], runTime: 20, startTime: now() - 240 },
+      { id: "demo-queued", zones: [6], runTime: 10, startTime: 0 },
+    ],
   };
 
-  fs.writeFile(savePath, JSON.stringify(data), "utf8");
+  return async (url, init = {}) => {
+    const parsed = new URL(url, "http://synthetic.invalid");
+    if (parsed.pathname === "/tasks" && !init.method) {
+      return Response.json({ tasks: state.tasks });
+    }
+    if (parsed.pathname === "/tasks/add") {
+      const body = JSON.parse(init.body);
+      for (const task of body.tasks) {
+        state.tasks.push({
+          id: `demo-${nextId++}`,
+          zones: task.zones,
+          runTime: task.runTime,
+          startTime: state.tasks.some((t) => t.startTime !== 0) ? 0 : now(),
+        });
+      }
+      return Response.json({ success: true });
+    }
+    if (parsed.pathname === "/tasks/delete") {
+      const id = parsed.searchParams.get("id");
+      state.tasks = state.tasks.filter((t) => t.id !== id);
+      return Response.json({ success: true });
+    }
+    return Response.json({ error: "not found" }, { status: 404 });
+  };
 }
 
-app.use(express.static(path.join(__dirname, "/public")));
-app.use(bodyParser.json());
+async function ensureDataFile(dataPath) {
+  try {
+    await fs.access(dataPath);
+  } catch {
+    await fs.mkdir(path.dirname(dataPath), { recursive: true });
+    await fs.writeFile(dataPath, JSON.stringify({ schedules: {}, history: [] }), "utf8");
+  }
+}
 
-app.set("view engine", "ejs");
+export async function createApp(options = {}) {
+  const demo = options.demo ?? process.env.SPRINKLER_DEMO === "1";
+  const dataPath =
+    options.dataPath ?? (demo ? path.join(os.tmpdir(), "sprinkler-demo-data.json") : savePath);
+  const controllerHost = options.controllerHost ?? `http://${process.env.MICROCONTROLLER_HOST}`;
+  const controllerFetch = demo
+    ? createSyntheticController()
+    : options.controllerFetch ?? ((url, init) => fetch(url, init));
 
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).send("Something broke!");
-});
+  if (demo) {
+    // Demo data must never collide with the live data file.
+    await fs.writeFile(dataPath, JSON.stringify({ schedules: {}, history: [] }), "utf8");
+  }
+  await ensureDataFile(dataPath);
 
-app.get("/", (req, res) => {
-  res.render("index");
-});
+  async function controllerRequest(pathname, init = undefined) {
+    let response;
+    try {
+      response = await controllerFetch(controllerHost + pathname, init);
+    } catch (err) {
+      throw new ControllerError(`controller unreachable: ${err.message}`);
+    }
+    if (!response.ok) {
+      throw new ControllerError(`controller responded ${response.status}`);
+    }
+    return response.json();
+  }
 
-app.get("/quick-task", (req, res) => {
-  res.render("quick-task");
-});
+  const app = express();
+  app.use(express.static(path.join(__dirname, "/public")));
+  app.use(bodyParser.json());
+  app.set("view engine", "ejs");
+  app.set("views", path.join(__dirname, "views"));
 
-app.get("/create-schedule", (req, res) => {
-  res.render("create-schedule");
-});
+  const wrap = (handler) => (req, res, next) => handler(req, res, next).catch(next);
 
-app.get("/edit-schedule", (req, res) => {
-  res.render("edit-schedule");
-});
+  const readData = async () => JSON.parse(await fs.readFile(dataPath, "utf8"));
+  const writeData = (data) => fs.writeFile(dataPath, JSON.stringify(data), "utf8");
 
-app.get("/api/schedules", async (req, res) => {
-  const data = await fs.readFile(savePath, "utf8");
-  res.json(JSON.parse(data).schedules);
-});
+  app.get("/", (req, res) => res.render("index"));
+  app.get("/quick-task", (req, res) => res.render("quick-task"));
+  app.get("/schedules", (req, res) => res.render("schedules"));
+  app.get("/create-schedule", (req, res) => res.render("create-schedule"));
+  app.get("/edit-schedule", (req, res) => res.render("edit-schedule"));
+  app.get("/activity", (req, res) => res.render("activity"));
+  app.get("/controller", (req, res) => res.render("controller"));
 
-app.post("/api/schedules/create", async (req, res) => {
-  const data = await fs.readFile(savePath, "utf8");
+  app.get(
+    "/api/schedules",
+    wrap(async (req, res) => {
+      res.json((await readData()).schedules);
+    })
+  );
 
-  const newSchedule = {
-    name: req.body.name,
-    days: req.body.days,
-    startTime: req.body.startTime,
-    lastRun: null,
-    enabled: true,
-    tasks: req.body.tasks,
-  };
+  app.post(
+    "/api/schedules/create",
+    wrap(async (req, res) => {
+      const data = await readData();
+      const newSchedule = {
+        name: req.body.name,
+        days: req.body.days,
+        startTime: req.body.startTime,
+        lastRun: null,
+        enabled: true,
+        tasks: req.body.tasks,
+      };
+      await writeData({
+        ...data,
+        schedules: { ...data.schedules, [uuid4()]: newSchedule },
+      });
+      res.json(newSchedule);
+    })
+  );
 
-  const newData = {
-    ...JSON.parse(data),
-    schedules: {
-      ...JSON.parse(data).schedules,
-      [uuid4()]: newSchedule,
-    },
-  };
-
-  // Write to file
-
-  await fs.writeFile(savePath, JSON.stringify(newData), "utf8");
-
-  res.json(newSchedule);
-});
-
-app.put("/api/schedules/update", async (req, res) => {
-  const data = await fs.readFile(savePath, "utf8");
-
-  const newData = {
-    ...JSON.parse(data),
-    schedules: {
-      ...JSON.parse(data).schedules,
-      [req.body.id]: {
-        ...JSON.parse(data).schedules[req.body.id],
+  app.put(
+    "/api/schedules/update",
+    wrap(async (req, res) => {
+      const data = await readData();
+      if (!data.schedules[req.body.id]) {
+        return res.status(404).json({ error: "schedule not found" });
+      }
+      const updated = {
+        ...data.schedules[req.body.id],
         name: req.body.name,
         days: req.body.days,
         startTime: req.body.startTime,
         tasks: req.body.tasks,
         enabled: req.body.enabled,
-      },
-    },
-  };
-
-  // Write to file
-
-  await fs.writeFile(savePath, JSON.stringify(newData), "utf8");
-
-  res.json(newData.schedules[req.body.id]);
-});
-
-app.delete("/api/schedules/delete", async (req, res) => {
-  const data = await fs.readFile(savePath, "utf8");
-
-  const newData = JSON.parse(data);
-  delete newData.schedules[req.body.id];
-
-  // Write to file
-  await fs.writeFile(savePath, JSON.stringify(newData), "utf8");
-
-  res.json({ success: true });
-});
-
-app.get("/api/history", async (req, res) => {
-  const data = await fs.readFile(savePath, "utf8");
-
-  const limit = req.query.limit || 50;
-  const history = JSON.parse(data).history.slice(0, limit);
-
-  res.json(history);
-});
-
-app.post("/api/history/create", async (req, res) => {
-  const newHistory = await logHistory(
-    req.body.zones,
-    req.body.event,
-    req.body.reason
+      };
+      await writeData({
+        ...data,
+        schedules: { ...data.schedules, [req.body.id]: updated },
+      });
+      res.json(updated);
+    })
   );
 
-  res.json(newHistory);
-});
-
-app.get("/api/tasks", async (req, res) => {
-  const response = await fetch(microcontrollerHost + "/tasks");
-  const data = await response.json();
-
-  res.json(data);
-});
-
-app.post("/api/tasks/create", async (req, res) => {
-  console.log(req.body);
-
-  const response = await fetch(microcontrollerHost + "/tasks/add", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      tasks: [
-        {
-          zones: req.body.zones,
-          runTime: req.body.runTime,
-        },
-      ],
-    }),
-  });
-
-  const data = await response.json();
-
-  await logHistory(req.body.zones, "Started", "Remote");
-
-  res.json(data);
-});
-
-app.delete("/api/tasks/delete", async (req, res) => {
-  const response1 = await fetch(microcontrollerHost + `/tasks`);
-  const data1 = await response1.json();
-
-  const task = data1.tasks.find((t) => t.id === req.body.id);
-
-  const response2 = await fetch(
-    microcontrollerHost + `/tasks/delete?id=${req.body.id}`,
-    {
-      method: "DELETE",
-    }
+  app.delete(
+    "/api/schedules/delete",
+    wrap(async (req, res) => {
+      const data = await readData();
+      delete data.schedules[req.body.id];
+      await writeData(data);
+      res.json({ success: true });
+    })
   );
 
-  const data2 = await response2.json();
+  app.get(
+    "/api/history",
+    wrap(async (req, res) => {
+      const limit = req.query.limit || 50;
+      res.json((await readData()).history.slice(0, limit));
+    })
+  );
 
-  await logHistory(task.zones, "Stopped", "Remote");
+  app.post(
+    "/api/history/create",
+    wrap(async (req, res) => {
+      res.json(await logHistory(dataPath, req.body.zones, req.body.event, req.body.reason));
+    })
+  );
 
-  res.json(data2);
-});
+  app.get(
+    "/api/tasks",
+    wrap(async (req, res) => {
+      res.json(await controllerRequest("/tasks"));
+    })
+  );
 
-let activeZones = [];
-
-setInterval(async () => {
-  const response = await fetch(microcontrollerHost + "/tasks");
-  const data = await response.json();
-
-  const zoneSet = new Set();
-
-  for (const task of data.tasks) {
-    for (const zone of task.zones) {
-      zoneSet.add(zone);
-    }
-  }
-
-  activeZones = [...zoneSet];
-}, 10000);
-
-app.get("/api/zones", async (req, res) => {
-  res.json(activeZones);
-});
-
-app.post("/api/zones", async (req, res) => {
-  // Body will include 1 zone and on/off
-  // If off, get all tasks on the microcontroller and remove the zone from each task, if there is a task with only 1 zone, delete it
-  // If a task is already running, readd the task with only the time remaining
-  // If on, add a task with the zone and 15 minutes
-
-  const response = await fetch(microcontrollerHost + "/tasks");
-  const data = await response.json();
-
-  const zone = req.body.zone;
-  const on = req.body.on;
-
-  console.log(req.body);
-
-  const tasks = data.tasks;
-
-  const newTasks = [];
-
-  if (on) {
-    const response = await fetch(microcontrollerHost + "/tasks/add", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        tasks: [
-          {
-            zones: [zone],
-            runTime: 15,
-          },
-        ],
-      }),
-    });
-
-    console.log(await logHistory([zone], "Started", "Home Assistant"));
-  } else {
-    // Delete all tasks
-    for (const task of tasks.reverse()) {
-      const response = await fetch(
-        microcontrollerHost + `/tasks/delete?id=${task.id}`,
-        {
-          method: "DELETE",
-          headers: {
-            "Content-Type": "application/json",
-          },
-        }
-      );
-    }
-
-    // Remove zone from all tasks
-    for (const task of tasks.reverse()) {
-      const zones = task.zones.filter((z) => z !== zone);
-
-      if (zones.length > 0) {
-        let newRunTime;
-        // Calculate new run time
-        if (task.startTime != 0) {
-          newRunTime = Math.ceil(
-            task.runTime - (Date.now() / 1000 - task.startTime) / 60
-          );
-        } else {
-          newRunTime = task.runTime;
-        }
-
-        const response = await fetch(microcontrollerHost + "/tasks/add", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            tasks: [
-              {
-                zones,
-                runTime: newRunTime,
-              },
-            ],
-          }),
-        });
-      }
-    }
-
-    console.log(await logHistory([zone], "Stopped", "Home Assistant"));
-  }
-
-  res.json({ success: true });
-});
-
-setInterval(async () => {
-  // Check if any schedules need to run
-
-  const data = JSON.parse(await fs.readFile(savePath, "utf8"));
-
-  const schedules = data.schedules;
-
-  for (const [id, schedule] of Object.entries(schedules)) {
-    const now = new Date();
-    const day = now.getDay();
-    const hour = now.getHours();
-    const minute = now.getMinutes();
-
-    if (
-      schedule.enabled &&
-      schedule.days.includes(day) &&
-      schedule.startTime ===
-        `${hour.toString().padStart(2, "0")}:${minute
-          .toString()
-          .padStart(2, "0")}` &&
-      schedule.lastRun + 60 < Math.floor(Date.now() / 1000)
-    ) {
-      console.log("Running schedule", schedule.name);
-
-      // Run schedule
-
-      const response = await fetch(microcontrollerHost + "/tasks/add", {
+  app.post(
+    "/api/tasks/create",
+    wrap(async (req, res) => {
+      const data = await controllerRequest("/tasks/add", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          tasks: schedule.tasks,
+          tasks: [{ zones: req.body.zones, runTime: req.body.runTime }],
         }),
       });
+      await logHistory(dataPath, req.body.zones, "Started", "Remote");
+      res.json(data);
+    })
+  );
 
-      const newData = {
-        ...data,
-        schedules: {
-          ...data.schedules,
-          [id]: {
-            ...data.schedules[id],
-            lastRun: Math.floor(Date.now() / 1000),
+  app.delete(
+    "/api/tasks/delete",
+    wrap(async (req, res) => {
+      const current = await controllerRequest("/tasks");
+      const task = current.tasks.find((t) => t.id === req.body.id);
+      if (!task) {
+        return res.status(404).json({ error: "task not found" });
+      }
+      const data = await controllerRequest(`/tasks/delete?id=${req.body.id}`, {
+        method: "DELETE",
+      });
+      await logHistory(dataPath, task.zones, "Stopped", "Remote");
+      res.json(data);
+    })
+  );
+
+  let activeZones = [];
+
+  async function refreshActiveZones() {
+    const data = await controllerRequest("/tasks");
+    const zoneSet = new Set();
+    for (const task of data.tasks) {
+      for (const zone of task.zones) {
+        zoneSet.add(zone);
+      }
+    }
+    activeZones = [...zoneSet];
+  }
+
+  app.get("/api/zones", (req, res) => res.json(activeZones));
+
+  app.post(
+    "/api/zones",
+    wrap(async (req, res) => {
+      // Body includes one zone and on/off.
+      // If on, add a 15 minute task for the zone.
+      // If off, rebuild every task without the zone, keeping remaining time.
+      const { zone, on } = req.body;
+      const data = await controllerRequest("/tasks");
+      const tasks = data.tasks;
+
+      if (on) {
+        await controllerRequest("/tasks/add", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tasks: [{ zones: [zone], runTime: 15 }] }),
+        });
+        await logHistory(dataPath, [zone], "Started", "Home Assistant");
+      } else {
+        for (const task of [...tasks].reverse()) {
+          await controllerRequest(`/tasks/delete?id=${task.id}`, { method: "DELETE" });
+        }
+        for (const task of [...tasks].reverse()) {
+          const zones = task.zones.filter((z) => z !== zone);
+          if (zones.length > 0) {
+            const newRunTime =
+              task.startTime !== 0
+                ? Math.ceil(task.runTime - (Date.now() / 1000 - task.startTime) / 60)
+                : task.runTime;
+            await controllerRequest("/tasks/add", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ tasks: [{ zones, runTime: newRunTime }] }),
+            });
+          }
+        }
+        await logHistory(dataPath, [zone], "Stopped", "Home Assistant");
+      }
+
+      res.json({ success: true });
+    })
+  );
+
+  async function runScheduleTick(now = new Date()) {
+    const data = await readData();
+    for (const [id, schedule] of Object.entries(data.schedules)) {
+      const day = now.getDay();
+      const clock = `${now.getHours().toString().padStart(2, "0")}:${now
+        .getMinutes()
+        .toString()
+        .padStart(2, "0")}`;
+
+      if (
+        schedule.enabled &&
+        schedule.days.includes(day) &&
+        schedule.startTime === clock &&
+        (schedule.lastRun ?? 0) + 60 < Math.floor(now.getTime() / 1000)
+      ) {
+        await controllerRequest("/tasks/add", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tasks: schedule.tasks }),
+        });
+
+        const latest = await readData();
+        await writeData({
+          ...latest,
+          schedules: {
+            ...latest.schedules,
+            [id]: { ...latest.schedules[id], lastRun: Math.floor(now.getTime() / 1000) },
           },
-        },
-      };
+        });
 
-      // Write to file
-
-      await fs.writeFile(savePath, JSON.stringify(newData), "utf8");
-
-      let timestamp = Math.floor(Date.now() / 1000);
-
-      for (const task of schedule.tasks) {
-        console.log(
-          await logHistory(task.zones, "Started", "Schedule", timestamp)
-        );
-        timestamp += task.runTime * 60;
+        let timestamp = Math.floor(now.getTime() / 1000);
+        for (const task of schedule.tasks) {
+          await logHistory(dataPath, task.zones, "Started", "Schedule", timestamp);
+          timestamp += task.runTime * 60;
+        }
       }
     }
   }
-}, 5000);
 
-app.listen(port, () => {
-  console.log(`Sprinkler Webserver listening on port ${port}`);
-});
+  const timers = [];
+  function startBackgroundJobs() {
+    timers.push(setInterval(() => refreshActiveZones().catch(() => {}), 10000));
+    timers.push(setInterval(() => runScheduleTick().catch((err) => console.error(err)), 5000));
+  }
+  function stopBackgroundJobs() {
+    timers.splice(0).forEach(clearInterval);
+  }
+
+  app.use((err, req, res, next) => {
+    if (err instanceof ControllerError) {
+      return res.status(502).json({ error: err.message });
+    }
+    console.error(err.stack);
+    res.status(500).json({ error: "internal error" });
+  });
+
+  return { app, dataPath, demo, refreshActiveZones, runScheduleTick, startBackgroundJobs, stopBackgroundJobs };
+}
+
+const isMain =
+  process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+
+if (isMain) {
+  const port = process.env.PORT || 5000;
+  const { app, demo, startBackgroundJobs } = await createApp();
+  if (!demo) {
+    startBackgroundJobs();
+  }
+  app.listen(port, () => {
+    console.log(`Sprinkler Webserver listening on port ${port}${demo ? " (demo mode)" : ""}`);
+  });
+}

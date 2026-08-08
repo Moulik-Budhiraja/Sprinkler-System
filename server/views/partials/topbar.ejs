@@ -1,33 +1,20 @@
-<header class="topbar">
-  <div class="topbar__inner">
-    <a href="/" class="brand">
-      <span class="brand__mark">
-        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path
-            d="M12 2.5C12 2.5 5.5 9.2 5.5 14a6.5 6.5 0 1 0 13 0C18.5 9.2 12 2.5 12 2.5Z"
-            fill="#0a1f0c"
-            stroke="#0a1f0c"
-            stroke-width="1.2"
-            stroke-linejoin="round"
-          />
-          <path
-            d="M10 14.2a2.4 2.4 0 0 0 2.4 2.4"
-            stroke="#bff58f"
-            stroke-width="1.4"
-            stroke-linecap="round"
-          />
-        </svg>
-      </span>
-      <span class="brand__text">
-        <span class="brand__title">Verdant</span>
-        <span class="brand__sub">Irrigation</span>
-      </span>
-    </a>
-
-    <nav class="nav">
-      <a href="/" class="<%= active === 'home' ? 'active' : '' %>">Dashboard</a>
-      <a href="/quick-task" class="<%= active === 'quick' ? 'active' : '' %>">Quick Task</a>
-      <a href="/create-schedule" class="<%= active === 'create' ? 'active' : '' %>">New Schedule</a>
-    </nav>
+<aside class="sidebar" data-testid="sidebar">
+  <a class="sidebar-brand" data-testid="sidebar-brand" href="/" aria-label="Living Yard home">
+    <span class="brand-title" data-testid="brand-title">Living Yard</span>
+    <span class="brand-subtitle" data-testid="brand-subtitle">Sprinkler system</span>
+  </a>
+  <nav class="sidebar-nav" aria-label="Primary">
+    <a href="/" data-testid="nav-today" class="<%= active === 'home' ? 'active' : '' %>"><span aria-hidden="true">⌂</span>Today</a>
+    <a href="/schedules" class="<%= active === 'schedules' ? 'active' : '' %>"><span aria-hidden="true">≋</span>Schedules</a>
+    <a href="/activity" class="<%= active === 'activity' ? 'active' : '' %>"><span aria-hidden="true">↻</span>Activity</a>
+    <a href="/controller" class="<%= active === 'controller' ? 'active' : '' %>"><span aria-hidden="true">◌</span>Controller</a>
+  </nav>
+</aside>
+<header class="mobile-header" data-testid="mobile-header">
+  <div class="mobile-brand">
+    <strong>Living Yard</strong>
+    <span class="product-name" data-testid="product-name">Sprinkler system</span>
   </div>
+  <div class="controller-status" data-testid="controller-status"><i aria-hidden="true"></i><span id="mobileControllerStatus">Checking controller</span></div>
+  <div class="header-divider" data-testid="header-divider"></div>
 </header>
