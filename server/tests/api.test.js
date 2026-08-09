@@ -86,8 +86,12 @@ test("controller failures surface as non-2xx JSON errors and ambiguous starts ar
   const failing = async () => new Response("boom", { status: 500 });
   const { app } = await createApp({ dataPath, controllerFetch: failing });
   await withBoundServer(app, async (client) => {
-    const res = await client.get("/api/tasks").expect(502);
-    assert.match(res.body.error, /controller/i);
+    const res = await client.get("/api/tasks").expect(503);
+    assert.deepEqual(res.body, {
+      error: "controller read unavailable",
+      kind: "read_unavailable",
+      recovery: "Refresh controller status when the controller is available.",
+    });
     const ambiguous = await client.post("/api/tasks/create")
       .send({ requestId: "manual-api-http500-0001", zones: [1], runTime: 5 })
       .expect(202);

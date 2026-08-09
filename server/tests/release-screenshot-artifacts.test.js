@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import { promisify } from "node:util";
 import test from "node:test";
 import zlib from "node:zlib";
+
+const execFileAsync = promisify(execFile);
 
 const repositoryRoot = new URL("../../", import.meta.url);
 const artifactDirectory = new URL("screenshots/v4-local/", repositoryRoot);
@@ -11,9 +15,9 @@ const manifestUrl = new URL("release-screenshot-manifest.json", artifactDirector
 const expectedArtifacts = {
   "desktop-1440-copy.png": [1440, 937],
   "desktop-1440-standalone.png": [1440, 965],
-  "mobile-844-copy.png": [390, 1117],
-  "mobile-1067-copy.png": [390, 1117],
-  "mobile-390x844-standalone.png": [390, 1165],
+  "mobile-844-copy.png": [390, 1047],
+  "mobile-1067-copy.png": [390, 1067],
+  "mobile-390x844-standalone.png": [390, 1047],
 };
 
 function parsePng(buffer) {
@@ -118,5 +122,24 @@ test("release capture is explicit, semantic-gated, and read-only unless requeste
     assert.ok(source.includes(JSON.stringify(text)), `capture checks visible ${text}`);
   }
   for (const name of Object.keys(expectedArtifacts)) assert.ok(source.includes(JSON.stringify(name)), `capture defines ${name}`);
+  assert.match(source, /addInitScript[\s\S]*Date\.now\s*=\s*\(\)\s*=>\s*fixedNowMs/,
+    "capture freezes the browser clock to the seeded running-task instant");
   assert.doesNotMatch(source, /MICROCONTROLLER_HOST|\.launchPersistentContext\(/);
+});
+
+test("committed release validation performs two clean read-only recaptures against the manifest", async () => {
+  const trackedBefore = await Promise.all(Object.keys(expectedArtifacts).map(async (name) =>
+    crypto.createHash("sha256").update(await fs.readFile(new URL(name, artifactDirectory))).digest("hex")
+  ));
+  const { stdout } = await execFileAsync(process.execPath, ["scripts/verify-release-screenshots.mjs"], {
+    cwd: new URL("../", import.meta.url),
+    timeout: 120_000,
+    maxBuffer: 1024 * 1024,
+  });
+  assert.match(stdout, /verified 5 artifacts across 2 byte-identical read-only recaptures/);
+  assert.match(stdout, /negative byte-comparison control detected/);
+  const trackedAfter = await Promise.all(Object.keys(expectedArtifacts).map(async (name) =>
+    crypto.createHash("sha256").update(await fs.readFile(new URL(name, artifactDirectory))).digest("hex")
+  ));
+  assert.deepEqual(trackedAfter, trackedBefore, "validation must not write tracked screenshots");
 });

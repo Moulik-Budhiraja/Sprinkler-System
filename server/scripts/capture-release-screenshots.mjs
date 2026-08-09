@@ -20,9 +20,9 @@ const origin = `http://127.0.0.1:${port}`;
 const artifactSpecs = [
   { name: "desktop-1440-copy.png", viewport: { width: 1440, height: 900 }, dimensions: { width: 1440, height: 937 } },
   { name: "desktop-1440-standalone.png", viewport: { width: 1440, height: 900 }, dimensions: { width: 1440, height: 965 } },
-  { name: "mobile-844-copy.png", viewport: { width: 390, height: 844 }, dimensions: { width: 390, height: 1117 } },
-  { name: "mobile-1067-copy.png", viewport: { width: 390, height: 1067 }, dimensions: { width: 390, height: 1117 } },
-  { name: "mobile-390x844-standalone.png", viewport: { width: 390, height: 844 }, dimensions: { width: 390, height: 1165 } },
+  { name: "mobile-844-copy.png", viewport: { width: 390, height: 844 }, dimensions: { width: 390, height: 1047 } },
+  { name: "mobile-1067-copy.png", viewport: { width: 390, height: 1067 }, dimensions: { width: 390, height: 1067 } },
+  { name: "mobile-390x844-standalone.png", viewport: { width: 390, height: 844 }, dimensions: { width: 390, height: 1047 } },
 ];
 const requiredText = ["5m", "15m", "30m", "60m", "Status", "Morning lawn", "Started", "Zones 1, 2", "Schedule"];
 const forbiddenText = ["10m", "20m", "Morning lawnEnabled", "Started · Zones 1, 2Schedule", "Living YardSprinkler system", "D01 — Dashboard"];
@@ -83,8 +83,23 @@ try {
     tasks: [{ zones: [1, 2], runTime: 15 }],
   });
   await post("/api/history/create", { zones: [1, 2], event: "Started", reason: "Schedule" });
+  const controllerResponse = await fetch(`${origin}/api/tasks`, { cache: "no-store" });
+  assert.ok(controllerResponse.ok, `controller snapshot returned ${controllerResponse.status}`);
+  const controllerSnapshot = await controllerResponse.json();
+  const runningTask = controllerSnapshot.tasks.find((task) => task.startTime > 0);
+  assert.ok(runningTask, "deterministic capture requires one running synthetic task");
+  const fixedNowMs = (runningTask.startTime + 240) * 1000;
   await fs.mkdir(outputDirectory, { recursive: true });
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({
+    headless: true,
+    args: [
+      "--disable-gpu",
+      "--disable-lcd-text",
+      "--font-render-hinting=none",
+      "--force-color-profile=srgb",
+      "--hide-scrollbars",
+    ],
+  });
   const results = [];
   for (const spec of artifactSpecs) {
     const context = await browser.newContext({
@@ -96,6 +111,9 @@ try {
       colorScheme: "dark",
       serviceWorkers: "block",
     });
+    await context.addInitScript((fixedNowMs) => {
+      Date.now = () => fixedNowMs;
+    }, fixedNowMs);
     const page = await context.newPage();
     const runtimeProblems = [];
     page.on("console", (message) => {
@@ -104,11 +122,28 @@ try {
     page.on("pageerror", (error) => runtimeProblems.push(`pageerror: ${error.message}`));
     page.on("requestfailed", (request) => runtimeProblems.push(`requestfailed: ${request.url()} ${request.failure()?.errorText}`));
     await page.goto(`${origin}/`, { waitUntil: "networkidle" });
+    await page.addStyleTag({ content: `
+      *, *::before, *::after {
+        animation: none !important;
+        caret-color: transparent !important;
+        transition: none !important;
+      }
+      input, textarea, [contenteditable="true"] { caret-color: transparent !important; }
+      html { font-synthesis: none; }
+      @media (max-width: 899px) {
+        body { display: block !important; height: auto !important; min-height: 100% !important; overflow: visible !important; }
+        .shell { overflow: visible !important; }
+        .mobile-nav { position: static !important; }
+      }
+      ` });
     await page.locator("[data-testid=field-zone-6]").waitFor();
     await page.evaluate(() => document.fonts.ready);
     await page.waitForFunction(() => document.querySelector("#mobileControllerStatus")?.textContent === "Controller online");
     await page.waitForFunction(() => document.querySelector("#schedules")?.innerText.includes("Morning lawn") && document.querySelector("#history")?.innerText.includes("Started"));
-    await page.waitForTimeout(250);
+    await page.evaluate(async () => {
+      await document.fonts.ready;
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    });
 
     const semantic = await page.evaluate(({ requiredText, forbiddenText }) => {
       const bodyText = document.body.innerText;
@@ -135,6 +170,13 @@ try {
         textBoxes,
         presets: [...document.querySelectorAll("#quickDurations button")].map((button) => button.textContent.trim().replace(/m$/, "")),
         statusLinks: [...document.querySelectorAll('a[href="/status"]')].filter(visible).length,
+        navigationOverlap: (() => {
+          const main = document.querySelector("main")?.getBoundingClientRect();
+          const nav = document.querySelector(".mobile-nav")?.getBoundingClientRect();
+          if (!main || !nav || getComputedStyle(document.querySelector(".mobile-nav")).display === "none") return false;
+          return Math.min(main.right, nav.right) - Math.max(main.left, nav.left) > 0.5 &&
+            Math.min(main.bottom, nav.bottom) - Math.max(main.top, nav.top) > 0.5;
+        })(),
       };
     }, { requiredText, forbiddenText });
     assert.deepEqual(semantic.missing, [], `${spec.name} required visible text`);
@@ -142,6 +184,11 @@ try {
     assert.deepEqual(semantic.clipping, [], `${spec.name} clipped visible text`);
     assert.deepEqual(semantic.presets, ["5", "15", "30", "60"], `${spec.name} authoritative presets`);
     assert.ok(semantic.statusLinks >= 1, `${spec.name} visible Status navigation`);
+    assert.equal(semantic.navigationOverlap, false, `${spec.name} mobile navigation outside content flow`);
+    if (spec.viewport.width < 900) {
+      const documentHeight = await page.evaluate(() => document.documentElement.scrollHeight);
+      assert.equal(spec.dimensions.height, documentHeight, `${spec.name} complete mobile document height`);
+    }
     for (let left = 0; left < semantic.textBoxes.length; left += 1) {
       for (let right = left + 1; right < semantic.textBoxes.length; right += 1) {
         assert.equal(intersect(semantic.textBoxes[left], semantic.textBoxes[right]), false,

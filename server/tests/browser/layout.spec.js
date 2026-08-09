@@ -59,6 +59,49 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   });
 }
 
+for (const width of [320, 375, 390, 393, 430]) {
+  test(`mobile scroll viewport keeps all functional content outside bottom navigation at ${width}x844`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto("/");
+    await page.waitForSelector("[data-testid=field-zone-6]");
+    const geometry = async (stage) => {
+      const result = await page.evaluate(() => {
+        const main = document.querySelector("main");
+        const nav = document.querySelector(".mobile-nav");
+        const mainRect = main.getBoundingClientRect();
+        const navRect = nav.getBoundingClientRect();
+        const overlap = Math.min(mainRect.bottom, navRect.bottom) - Math.max(mainRect.top, navRect.top) > 0.5 &&
+          Math.min(mainRect.right, navRect.right) - Math.max(mainRect.left, navRect.left) > 0.5;
+        return {
+          overlap,
+          mainBottom: mainRect.bottom,
+          navTop: navRect.top,
+          overflowY: getComputedStyle(main).overflowY,
+          scrollHeight: main.scrollHeight,
+          clientHeight: main.clientHeight,
+        };
+      });
+      expect(result.overlap, `${stage}: main viewport intersects navigation`).toBe(false);
+      expect(result.mainBottom, `${stage}: main ends above navigation`).toBeLessThanOrEqual(result.navTop + 0.5);
+      expect(result.overflowY, `${stage}: content uses its own reachable flow`).toBe("auto");
+      expect(result.scrollHeight, `${stage}: dashboard remains scrollable`).toBeGreaterThan(result.clientHeight);
+    };
+    await geometry("initial");
+    await page.locator("main").evaluate((main) => { main.scrollTop = Math.floor(main.scrollHeight / 2); });
+    await geometry("mid-scroll");
+    const refresh = page.getByRole("button", { name: "Refresh controller status" });
+    await refresh.focus();
+    await refresh.evaluate((node) => node.scrollIntoView({ block: "nearest" }));
+    await expect(refresh).toBeFocused();
+    await geometry("keyboard-focus");
+    await page.locator("#fieldMutationFeedback").evaluate((node) => {
+      node.textContent = "Mutation outcome unknown · check Status";
+      node.scrollIntoView({ block: "nearest" });
+    });
+    await geometry("mutation-feedback");
+  });
+}
+
 for (const viewport of [{ width: 390, height: 844 }, { width: 390, height: 1067 }]) {
   test(`mobile header and Quick Task copy are intact at ${viewport.width}x${viewport.height}`, async ({ page }, testInfo) => {
     const problems = watchRuntime(page);

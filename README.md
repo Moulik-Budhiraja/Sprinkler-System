@@ -40,7 +40,7 @@ cd Sprinkler-System/server
 # Controller deployment: both values are mandatory
 SPRINKLER_DEMO=0 \
 SPRINKLER_PUBLIC_ORIGIN=https://sprinklers.example.test \
-docker compose up -d
+docker compose up -d --build --pull never
 ```
 
 The default Compose binding is `127.0.0.1:5000`; physical controls are not

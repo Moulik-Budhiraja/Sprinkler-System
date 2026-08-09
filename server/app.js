@@ -24,10 +24,18 @@ dotenv.config();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MUTATION_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const activeScheduleDispatchOwners = new Set();
+const activeScheduleDispatches = new Set();
 
 class ControllerError extends Error {}
 class ControllerRejectedError extends ControllerError {}
 class AmbiguousControllerError extends ControllerError {}
+class ControllerReadError extends ControllerError {
+  constructor(message = "controller read unavailable") {
+    super(message);
+    this.code = "CONTROLLER_READ_UNAVAILABLE";
+  }
+}
 class ControllerCapacityError extends ControllerError {
   constructor(message = "controller work capacity is unavailable") {
     super(message);
@@ -147,6 +155,58 @@ function orderedSchedules(schedules) {
   ));
 }
 
+function scheduleRevision(schedule) {
+  return Number.isSafeInteger(schedule?.revision) && schedule.revision > 0 ? schedule.revision : 1;
+}
+
+function dispatchOperationSettled(operation, now = Date.now()) {
+  operation.dispatchSettledAt = now;
+  operation.updatedAt = now;
+}
+
+function dispatchOwnerIsActive(operation) {
+  if (!Number.isSafeInteger(operation.dispatchPid) || typeof operation.dispatchOwner !== "string") return false;
+  if (operation.dispatchPid === process.pid) {
+    const token = `${operation.dispatchOwner}:${operation.id}`;
+    return activeScheduleDispatches.has(token) ||
+      (operation.state === "dispatching" && activeScheduleDispatchOwners.has(operation.dispatchOwner));
+  }
+  if (Number.isFinite(operation.dispatchSettledAt)) return false;
+  try {
+    process.kill(operation.dispatchPid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+function reconcileInactiveScheduleDispatches(data, now = Date.now()) {
+  for (const operation of Object.values(data.operations ?? {})) {
+    if (operation?.type === "schedule-start" && operation.state === "dispatching" && !dispatchOwnerIsActive(operation, now)) {
+      operation.state = "outcome_unknown";
+      operation.updatedAt = now;
+    }
+  }
+}
+
+function scheduleDispatchInProgress(data, scheduleId) {
+  reconcileInactiveScheduleDispatches(data);
+  return Object.values(data.operations).some((operation) =>
+    operation?.type === "schedule-start" && operation.scheduleId === scheduleId &&
+    (operation.state === "dispatching" ||
+      (operation.state === "outcome_unknown" && dispatchOwnerIsActive(operation)))
+  );
+}
+
+function scheduleDispatchRetry(res) {
+  return res.status(409).json({
+    error: "schedule dispatch in progress",
+    kind: "schedule_dispatching",
+    outcome: "not_applied",
+    recovery: "Retry after the current dispatch settles.",
+  });
+}
+
 export async function createApp(options = {}) {
   const demo = options.demo ?? process.env.SPRINKLER_DEMO === "1";
   let ownedDemoDir = null;
@@ -171,6 +231,8 @@ export async function createApp(options = {}) {
   const publicOrigin = configuredPublicOrigin ? normalizedPublicOrigin(configuredPublicOrigin) : null;
   const allowSyntheticTestOrigin = options.allowSyntheticTestOrigin === true;
   if (allowSyntheticTestOrigin && !demo) throw new Error("test origin mode is allowed only for a synthetic demo");
+  const scheduleDispatchOwner = crypto.randomUUID();
+  activeScheduleDispatchOwners.add(scheduleDispatchOwner);
   const controllerLeases = new Set();
   let controllerShuttingDown = false;
 
@@ -191,14 +253,14 @@ export async function createApp(options = {}) {
         const work = (async () => {
           const response = await controllerFetch(controllerHost + pathname, { ...(init ?? {}), signal: abortController.signal });
           if (!response?.ok) {
-            const ErrorType = mutation ? AmbiguousControllerError : ControllerRejectedError;
-            throw new ErrorType(`controller ${mutation ? "outcome unknown" : "rejected request"} (${response?.status ?? "invalid response"})`);
+            const ErrorType = mutation ? AmbiguousControllerError : ControllerReadError;
+            throw new ErrorType(`controller ${mutation ? "outcome unknown" : "read unavailable"} (${response?.status ?? "invalid response"})`);
           }
           try {
             return await response.json();
           } catch (error) {
-            const ErrorType = mutation ? AmbiguousControllerError : ControllerRejectedError;
-            throw new ErrorType(`controller ${mutation ? "outcome unknown" : "returned invalid data"}: ${error.message}`);
+            const ErrorType = mutation ? AmbiguousControllerError : ControllerReadError;
+            throw new ErrorType(`controller ${mutation ? "outcome unknown" : "read unavailable"}: ${error.message}`);
           }
         })();
         lease.activePromise = work;
@@ -232,7 +294,8 @@ export async function createApp(options = {}) {
         } catch (error) {
           lease.release();
           if (error instanceof ControllerError) throw error;
-          throw new AmbiguousControllerError(`controller outcome unknown: ${error.message}`);
+          const ErrorType = mutation ? AmbiguousControllerError : ControllerReadError;
+          throw new ErrorType(`controller ${mutation ? "outcome unknown" : "read unavailable"}: ${error.message}`);
         } finally {
           clearTimeout(timer);
         }
@@ -332,7 +395,7 @@ export async function createApp(options = {}) {
           : { conflict: true };
       }
       const id = uuid4();
-      const schedule = { ...semanticPayload, lastRun: null, enabled: true };
+      const schedule = { ...semanticPayload, lastRun: null, enabled: true, revision: 1 };
       const now = Date.now();
       data.schedules[id] = schedule;
       data.operations[requestId] = {
@@ -359,13 +422,20 @@ export async function createApp(options = {}) {
   app.put("/api/schedules/update", wrap(async (req, res) => {
     const parsed = scheduleUpdateBody(req.body);
     const updated = await repository.mutate((data) => {
-      if (!Object.hasOwn(data.schedules, parsed.id)) return null;
-      data.schedules[parsed.id] = { ...data.schedules[parsed.id], ...parsed };
+      if (!Object.hasOwn(data.schedules, parsed.id)) return { missing: true };
+      if (scheduleDispatchInProgress(data, parsed.id)) return { dispatching: true };
+      const previous = data.schedules[parsed.id];
+      data.schedules[parsed.id] = {
+        ...previous,
+        ...parsed,
+        revision: scheduleRevision(previous) + 1,
+      };
       delete data.schedules[parsed.id].id;
-      return data.schedules[parsed.id];
+      return { schedule: data.schedules[parsed.id] };
     });
-    if (!updated) return res.status(404).json({ error: "schedule not found" });
-    res.json(updated);
+    if (updated.missing) return res.status(404).json({ error: "schedule not found" });
+    if (updated.dispatching) return scheduleDispatchRetry(res);
+    res.json(updated.schedule);
   }));
 
   app.delete("/api/schedules/delete", wrap(async (req, res) => {
@@ -375,6 +445,7 @@ export async function createApp(options = {}) {
       const prior = data.operations[parsed.requestId];
       if (prior) return operationMatches(prior, parsed.requestId, "schedule-delete", payloadHash) ? { prior } : { conflict: true };
       if (!Object.hasOwn(data.schedules, parsed.id)) return { missing: true };
+      if (scheduleDispatchInProgress(data, parsed.id)) return { dispatching: true };
       delete data.schedules[parsed.id];
       const now = Date.now();
       const operation = { id: parsed.requestId, type: "schedule-delete", payloadHash, state: "completed", createdAt: now, updatedAt: now };
@@ -383,6 +454,7 @@ export async function createApp(options = {}) {
     });
     if (result.conflict) return res.status(409).json({ error: "requestId was already used for another operation" });
     if (result.missing) return res.status(404).json({ error: "schedule not found" });
+    if (result.dispatching) return scheduleDispatchRetry(res);
     res.status(result.prior ? 200 : 201).json(operationPublic(result.prior ?? result.operation));
   }));
 
@@ -616,18 +688,38 @@ export async function createApp(options = {}) {
         const controllerLease = acquireControllerLease();
         if (!controllerLease) continue;
         const operationId = `schedule:${id}:${occurrence}`;
-        const payloadHash = digest(schedule.tasks);
         let claimed;
         try {
           claimed = await repository.mutate((data) => {
-            if (data.operations[operationId]) return false;
+            const prior = data.operations[operationId];
+            if (prior) {
+              if (prior.type !== "schedule-start" || prior.scheduleId !== id) return null;
+              if (prior.state === "dispatching") {
+                reconcileInactiveScheduleDispatches(data);
+                return null;
+              }
+              return prior.state === "pending" ? structuredClone(prior) : null;
+            }
             const live = data.schedules[id];
-            if (!live || !live.enabled || !live.days.includes(day) || live.startTime !== clock) return false;
-            const timestamp = Math.floor(now.getTime() / 1000);
+            if (!live || !live.enabled || !live.days.includes(day) || live.startTime !== clock) return null;
+            const revision = scheduleRevision(live);
+            live.revision = revision;
+            const payload = structuredClone(live.tasks);
+            const payloadHash = digest(payload);
             const createdAt = Date.now();
-            data.operations[operationId] = { id: operationId, type: "schedule-start", payloadHash, state: "pending", createdAt, updatedAt: createdAt };
-            live.lastRun = timestamp;
-            return true;
+            data.operations[operationId] = {
+              id: operationId,
+              type: "schedule-start",
+              scheduleId: id,
+              scheduleRevision: revision,
+              occurrence,
+              payload,
+              payloadHash,
+              state: "pending",
+              createdAt,
+              updatedAt: createdAt,
+            };
+            return structuredClone(data.operations[operationId]);
           });
         } catch (error) {
           controllerLease.release();
@@ -637,18 +729,60 @@ export async function createApp(options = {}) {
           controllerLease.release();
           continue;
         }
+        await options.beforeScheduleDispatchTransition?.({ repository, operationId, scheduleId: id });
+        const dispatch = await repository.mutate((data) => {
+          const operation = data.operations[operationId];
+          if (!operation || operation.state !== "pending") return null;
+          const live = data.schedules[id];
+          const stillCurrent = live && live.enabled && live.days.includes(day) && live.startTime === clock &&
+            operation.occurrence === occurrence && operation.scheduleRevision === scheduleRevision(live) &&
+            operation.payloadHash === digest(live.tasks);
+          if (!stillCurrent) {
+            operation.state = "cancelled";
+            operation.cancelReason = "schedule_changed";
+            operation.updatedAt = Date.now();
+            return null;
+          }
+          const dispatchStartedAt = Date.now();
+          operation.state = "dispatching";
+          operation.dispatchOwner = scheduleDispatchOwner;
+          operation.dispatchPid = process.pid;
+          operation.updatedAt = dispatchStartedAt;
+          live.lastRun = Math.floor(now.getTime() / 1000);
+          return structuredClone(operation);
+        });
+        if (!dispatch) {
+          controllerLease.release();
+          continue;
+        }
+        claimed = dispatch;
+        const dispatchToken = `${scheduleDispatchOwner}:${operationId}`;
+        activeScheduleDispatches.add(dispatchToken);
         try {
-          await controllerRequest("/tasks/add", {
+          const controllerCall = controllerRequest("/tasks/add", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ tasks: schedule.tasks }),
+            body: JSON.stringify({ tasks: claimed.payload }),
           }, true, controllerLease);
+          const physicalWork = controllerLease.activePromise;
+          const markPhysicalSettlement = async () => {
+            activeScheduleDispatches.delete(dispatchToken);
+            try {
+              await repository.mutate((data) => {
+                const operation = data.operations[operationId];
+                if (operation) dispatchOperationSettled(operation);
+              });
+            } catch {}
+          };
+          if (physicalWork) physicalWork.then(markPhysicalSettlement, markPhysicalSettlement).catch(() => {});
+          else activeScheduleDispatches.delete(dispatchToken);
+          await controllerCall;
           await repository.mutate((data) => {
             const operation = data.operations[operationId];
             operation.state = "completed";
             operation.updatedAt = Date.now();
             let timestamp = Math.floor(now.getTime() / 1000);
-            for (const task of schedule.tasks) {
+            for (const task of claimed.payload) {
               addHistory(data, task.zones, "Started", "Schedule", timestamp, operationId);
               timestamp += task.runTime * 60;
             }
@@ -659,7 +793,7 @@ export async function createApp(options = {}) {
             operation.state = error instanceof ControllerRejectedError ? "rejected" : "outcome_unknown";
             operation.updatedAt = Date.now();
             if (operation.state === "outcome_unknown") {
-              for (const task of schedule.tasks) addHistory(data, task.zones, "Outcome unknown", "Schedule", Math.floor(now.getTime() / 1000), operationId);
+              for (const task of claimed.payload) addHistory(data, task.zones, "Outcome unknown", "Schedule", Math.floor(now.getTime() / 1000), operationId);
             }
           });
         }
@@ -710,6 +844,7 @@ export async function createApp(options = {}) {
         new Promise((resolve) => setTimeout(resolve, controllerShutdownDrainMs)),
       ]);
     }
+    activeScheduleDispatchOwners.delete(scheduleDispatchOwner);
     if (ownedDemoDir) {
       const owned = ownedDemoDir;
       ownedDemoDir = null;
@@ -722,6 +857,11 @@ export async function createApp(options = {}) {
     if (err?.type === "entity.too.large") return res.status(413).json({ error: "request body too large" });
     if (err instanceof SyntaxError && err.status === 400 && "body" in err) return res.status(400).json({ error: "malformed JSON" });
     if (err instanceof ControllerRejectedError) return res.status(502).json({ error: err.message });
+    if (err instanceof ControllerReadError) return res.status(503).json({
+      error: "controller read unavailable",
+      kind: "read_unavailable",
+      recovery: "Refresh controller status when the controller is available.",
+    });
     if (err instanceof AmbiguousControllerError) return res.status(503).json({ error: "controller outcome unknown", recovery: "Check controller status before retrying." });
     if (err?.code === "REPOSITORY_OVERLOADED" || err?.code === "CONTROLLER_OVERLOADED") {
       res.set("Retry-After", "1");

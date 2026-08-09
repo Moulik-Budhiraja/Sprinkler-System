@@ -1267,6 +1267,14 @@ button:disabled {
     display: none;
   }
 
+  .dashboard > [data-dashboard-section] {
+    flex: none;
+  }
+
+  .dashboard [data-dashboard-section="quick-task"] {
+    min-height: 176px;
+  }
+
   .lawn-field {
     aspect-ratio: auto;
     width: 100%;
@@ -1294,16 +1302,27 @@ button:disabled {
   }
 
   body {
-    padding-bottom: 58px;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) calc(58px + env(safe-area-inset-bottom, 0px));
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .shell {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scroll-padding-block: 18px;
   }
 
   .mobile-nav {
-    position: fixed;
+    position: static;
     z-index: 20;
-    inset: auto 0 0;
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    height: 58px;
+    height: calc(58px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
     background: var(--surface);
     border-top: 1px solid var(--line);
   }

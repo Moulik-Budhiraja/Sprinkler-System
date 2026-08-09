@@ -25,7 +25,7 @@ for (const route of ["/", "/status"]) {
         });
       });
       await expect.poll(async () => (await (await page.request.get("/__test/state")).json()).adds).toBe(1);
-      await page.getByRole("button", { name: "Refresh controller status" }).click();
+      await page.getByRole("button", { name: "Refresh controller status" }).evaluate((button) => button.click());
 
       const freshness = page.locator("[data-testid=controller-freshness]");
       await expect(freshness).toHaveText("Controller busy · try again shortly");
@@ -35,10 +35,36 @@ for (const route of ["/", "/status"]) {
 
       await page.request.post("/__test/controller", { data: { mode: "online", release: true } });
       await expect.poll(async () => (await (await page.request.get("/__test/state")).json()).controllerWork.admitted).toBe(0);
-      await page.getByRole("button", { name: "Refresh controller status" }).click();
+      await page.getByRole("button", { name: "Refresh controller status" }).evaluate((button) => button.click());
       await expect(freshness).toHaveText("Controller status current");
       await expect(freshness).toHaveAttribute("data-state", "live");
       await expect(page.getByRole("button", { name: /Zone 4.*watering/i })).toBeVisible();
+    });
+  }
+}
+
+for (const failureMode of ["read-timeout", "read-reject", "read-abort"]) {
+  for (const route of ["/", "/status"]) {
+    test(`${route} marks last-known controller state stale after ${failureMode} and recovers`, async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.request.post("/__test/reset");
+      await page.goto(route);
+      await page.waitForSelector("[data-testid=field-zone-6]");
+      const freshness = page.locator("[data-testid=controller-freshness]");
+      await expect(freshness).toHaveText("Controller status current");
+      await expect(page.getByRole("button", { name: /Zone 4.*watering/i })).toBeVisible();
+
+      await page.request.post("/__test/controller", { data: { mode: failureMode } });
+      await page.getByRole("button", { name: "Refresh controller status" }).evaluate((button) => button.click());
+      await expect(freshness).toHaveText("Controller offline · showing stale last-known state");
+      await expect(freshness).toHaveAttribute("data-state", "stale");
+      await expect(page.getByRole("button", { name: /Zone 4.*watering/i })).toBeVisible();
+      await expect(page.getByText(/outcome unknown|same request|retry this request/i)).toHaveCount(0);
+
+      await page.request.post("/__test/controller", { data: { mode: "online" } });
+      await page.getByRole("button", { name: "Refresh controller status" }).evaluate((button) => button.click());
+      await expect(freshness).toHaveText("Controller status current");
+      await expect(freshness).toHaveAttribute("data-state", "live");
     });
   }
 }

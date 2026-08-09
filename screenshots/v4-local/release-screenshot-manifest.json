@@ -26,18 +26,18 @@
     },
     "mobile-844-copy.png": {
       "viewport": [390, 844],
-      "dimensions": [390, 1117],
-      "sha256": "fb064c22a47db1070bf3423fba04c9851814c74bfd26042a9cf95fd29f16a1e1"
+      "dimensions": [390, 1047],
+      "sha256": "6357bf161a3c769b627811e70f508338eab7882e2aa292abaef8377f4b464a1b"
     },
     "mobile-1067-copy.png": {
       "viewport": [390, 1067],
-      "dimensions": [390, 1117],
-      "sha256": "3f0bca60941636567b144b67cf129e910db69a003ae255605a0ff2effadb5f26"
+      "dimensions": [390, 1067],
+      "sha256": "eba430da0e79c27b93a86a0f401b414e12df5f2c608a5f1fe6c603af934943da"
     },
     "mobile-390x844-standalone.png": {
       "viewport": [390, 844],
-      "dimensions": [390, 1165],
-      "sha256": "b58845b018847c72544ab0dca1db5264638a11e84012b37a1e3b4b6a4bc5df25"
+      "dimensions": [390, 1047],
+      "sha256": "6357bf161a3c769b627811e70f508338eab7882e2aa292abaef8377f4b464a1b"
     }
   }
 }

@@ -10,7 +10,7 @@
   "type": "module",
   "scripts": {
     "start": "node app.js",
-    "test": "node --test tests/*.test.js",
+    "test": "node --test --test-concurrency=1 tests/*.test.js",
     "test:browser": "playwright test",
     "test:all": "npm test && npm run test:browser",
     "check": "node --check app.js && node --check repository.js && node --check validation.js && node --check helpers.js && node --check public/scripts/header-status.js && node --check public/scripts/quick-task-contract.js && node --check public/scripts/mutation-recovery.js && node --check public/scripts/field.js && node --check public/scripts/index.js && node --check public/scripts/controller.js && node --check public/scripts/quick-task.js && node --check public/scripts/create-schedule.js && node --check public/scripts/edit-schedule.js"

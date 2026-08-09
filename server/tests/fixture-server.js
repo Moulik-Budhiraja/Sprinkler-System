@@ -37,7 +37,15 @@ let tasks = structuredClone(initialTasks);
 const controllerFetch = async (url, init = {}) => {
   if (mode === "offline") throw new Error("synthetic offline");
   const parsed = new URL(url);
-  if (parsed.pathname === "/tasks" && !init.method) return Response.json({ tasks });
+  if (parsed.pathname === "/tasks" && !init.method) {
+    if (mode === "read-timeout") {
+      return new Promise((resolve, reject) => init.signal?.addEventListener("abort", () =>
+        reject(init.signal.reason ?? new DOMException("Aborted", "AbortError")), { once: true }));
+    }
+    if (mode === "read-reject") return Response.json({ error: "synthetic read unavailable" }, { status: 503 });
+    if (mode === "read-abort") throw new DOMException("synthetic read aborted", "AbortError");
+    return Response.json({ tasks });
+  }
   if (parsed.pathname === "/tasks/add") {
     adds += 1;
     if (mode === "read-overload") {
