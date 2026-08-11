@@ -10,18 +10,6 @@
   <%- include("partials/topbar", { active: "home" }) %>
   <main id="main" class="shell dashboard">
     <header class="page-head"><h1>Today</h1></header>
-    <section class="qt" data-dashboard-section="quick-task" data-testid="quick-task" aria-labelledby="quickTaskHeading">
-      <form id="quickTaskForm">
-        <div class="qt-row">
-          <div class="qt-copy"><div><h2 class="qt-heading" id="quickTaskHeading" data-testid="quick-task-heading">Quick Task</h2><span class="qt-context">Runs once, right now</span></div><p class="qt-hint">Pick at least one zone to start · durations in minutes</p></div>
-          <div id="quickZones" class="qt-zones" role="group" aria-label="Zones"></div>
-          <span class="qt-sep" aria-hidden="true"></span>
-          <div id="quickDurations" class="qt-durations" role="group" aria-label="Duration"></div>
-          <button class="qt-start" type="submit" disabled>Start</button>
-        </div>
-        <output id="quickMessage" class="qt-feedback" aria-live="polite"></output>
-      </form>
-    </section>
 
     <section id="sprinklerField" class="lawn-field" data-dashboard-section="field" data-testid="field" aria-label="Sprinkler field"></section>
     <output id="fieldMutationFeedback" class="field-mutation-feedback" aria-live="polite"></output>
@@ -36,6 +24,22 @@
       <div id="history" class="history-list" aria-live="polite"><p class="empty">No history</p></div>
     </section>
     <div class="freshness-line"><span data-testid="controller-freshness" aria-live="polite">Controller status current</span><button class="text-action" id="refreshController" type="button" aria-label="Refresh controller status">Refresh</button></div>
+
+    <section class="qt-island" data-testid="quick-task-island" aria-labelledby="quickTaskHeading" hidden>
+      <form id="quickTaskForm">
+        <div class="qt-island-head">
+          <div class="qt-copy"><h2 class="qt-heading" id="quickTaskHeading" data-testid="quick-task-heading">Quick Task</h2><span class="qt-context">Runs once, right now</span></div>
+          <output class="qt-island-zones" id="quickTaskZones" data-testid="quick-task-zones"></output>
+          <button class="qt-close" id="quickTaskClose" type="button" aria-label="Close Quick Task and deselect all zones"><span aria-hidden="true">✕</span></button>
+        </div>
+        <p class="qt-hint">Pick at least one zone to start · durations in minutes</p>
+        <div class="qt-island-controls">
+          <div id="quickDurations" class="qt-durations" role="group" aria-label="Duration"></div>
+          <button class="qt-start" type="submit" disabled>Start</button>
+        </div>
+        <output id="quickMessage" class="qt-feedback" aria-live="polite"></output>
+      </form>
+    </section>
   </main>
   <%- include("partials/mobile-nav", { active: "home" }) %>
 </body>

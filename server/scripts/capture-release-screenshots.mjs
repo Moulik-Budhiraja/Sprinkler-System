@@ -18,13 +18,13 @@ const outputDirectory = writeArtifacts
 const port = 4289;
 const origin = `http://127.0.0.1:${port}`;
 const artifactSpecs = [
-  { name: "desktop-1440-copy.png", viewport: { width: 1440, height: 900 }, dimensions: { width: 1440, height: 937 } },
-  { name: "desktop-1440-standalone.png", viewport: { width: 1440, height: 900 }, dimensions: { width: 1440, height: 965 } },
-  { name: "mobile-844-copy.png", viewport: { width: 390, height: 844 }, dimensions: { width: 390, height: 1047 } },
+  { name: "desktop-1440-copy.png", viewport: { width: 1440, height: 900 }, dimensions: { width: 1440, height: 900 } },
+  { name: "desktop-1440-standalone.png", viewport: { width: 1440, height: 900 }, dimensions: { width: 1440, height: 900 } },
+  { name: "mobile-844-copy.png", viewport: { width: 390, height: 844 }, dimensions: { width: 390, height: 1023 } },
   { name: "mobile-1067-copy.png", viewport: { width: 390, height: 1067 }, dimensions: { width: 390, height: 1067 } },
-  { name: "mobile-390x844-standalone.png", viewport: { width: 390, height: 844 }, dimensions: { width: 390, height: 1047 } },
+  { name: "mobile-390x844-standalone.png", viewport: { width: 390, height: 844 }, dimensions: { width: 390, height: 1023 } },
 ];
-const requiredText = ["5m", "15m", "30m", "60m", "Status", "Morning lawn", "Started", "Zones 1, 2", "Schedule"];
+const requiredText = ["Status", "Morning lawn", "Started", "Zones 1, 2", "Schedule"];
 const forbiddenText = ["10m", "20m", "Morning lawnEnabled", "Started · Zones 1, 2Schedule", "Living YardSprinkler system", "D01 — Dashboard"];
 
 async function waitForHealth(child) {
@@ -168,7 +168,8 @@ try {
         forbidden: forbiddenText.filter((text) => bodyText.includes(text)),
         clipping,
         textBoxes,
-        presets: [...document.querySelectorAll("#quickDurations button")].map((button) => button.textContent.trim().replace(/m$/, "")),
+        presets: [...document.querySelectorAll("#quickDurations button")].map((button) => button.textContent.trim()),
+        quickTaskIslandHidden: document.querySelector("[data-testid=quick-task-island]")?.hidden === true,
         statusLinks: [...document.querySelectorAll('a[href="/status"]')].filter(visible).length,
         navigationOverlap: (() => {
           const main = document.querySelector("main")?.getBoundingClientRect();
@@ -182,7 +183,8 @@ try {
     assert.deepEqual(semantic.missing, [], `${spec.name} required visible text`);
     assert.deepEqual(semantic.forbidden, [], `${spec.name} stale or malformed text`);
     assert.deepEqual(semantic.clipping, [], `${spec.name} clipped visible text`);
-    assert.deepEqual(semantic.presets, ["5", "15", "30", "60"], `${spec.name} authoritative presets`);
+    assert.deepEqual(semantic.presets, ["5m", "15m", "30m", "60m"], `${spec.name} authoritative presets`);
+    assert.equal(semantic.quickTaskIslandHidden, true, `${spec.name} contextual Quick Task island hidden before selection`);
     assert.ok(semantic.statusLinks >= 1, `${spec.name} visible Status navigation`);
     assert.equal(semantic.navigationOverlap, false, `${spec.name} mobile navigation outside content flow`);
     if (spec.viewport.width < 900) {

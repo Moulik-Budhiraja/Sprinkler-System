@@ -13,11 +13,11 @@ const artifactDirectory = new URL("screenshots/v4-local/", repositoryRoot);
 const manifestUrl = new URL("release-screenshot-manifest.json", artifactDirectory);
 
 const expectedArtifacts = {
-  "desktop-1440-copy.png": [1440, 937],
-  "desktop-1440-standalone.png": [1440, 965],
-  "mobile-844-copy.png": [390, 1047],
+  "desktop-1440-copy.png": [1440, 900],
+  "desktop-1440-standalone.png": [1440, 900],
+  "mobile-844-copy.png": [390, 1023],
   "mobile-1067-copy.png": [390, 1067],
-  "mobile-390x844-standalone.png": [390, 1047],
+  "mobile-390x844-standalone.png": [390, 1023],
 };
 
 function parsePng(buffer) {
@@ -97,7 +97,7 @@ test("tracked V4 release screenshots match the reviewed artifact manifest", asyn
   assert.equal(manifest.route, "/");
   assert.equal(manifest.state, "explicit synthetic demo with deterministic clean browser context");
   assert.deepEqual(manifest.requiredVisibleText, [
-    "Living Yard", "Sprinkler system", "Status", "Quick Task", "5m", "15m", "30m", "60m", "Schedules", "History",
+    "Living Yard", "Sprinkler system", "Status", "Schedules", "History",
   ]);
   assert.deepEqual(Object.keys(manifest.artifacts).sort(), Object.keys(expectedArtifacts).sort());
 

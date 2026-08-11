@@ -112,21 +112,25 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 390, height: 1067 
     const product = await box(page, "[data-testid=mobile-product-heading]");
     const controller = await box(page, "[data-testid=controller-status]");
     const divider = await box(page, "[data-testid=header-divider]");
-    const quick = await box(page, "[data-testid=quick-task-heading]");
-    const quickPanel = await box(page, "[data-testid=quick-task]");
     expect(product.text).toBe("Sprinkler system");
     expect(product.lines).toBe(1);
-    expect(quick.text).toBe("Quick Task");
-    expect(quick.lines).toBe(1);
     inside(product, header, "product name");
     inside(controller, header, "controller status");
-    inside(quick, quickPanel, "Quick Task heading");
     separate(product, controller, "header text overlaps controller status");
     separate(controller, divider, "controller status overlaps divider");
     await expect(page.locator("[data-testid=field] .field-status-copy, [data-testid=field] time")).toHaveCount(0);
     await expect(page.locator("[data-testid=field-zone]")).toHaveCount(6);
     expect(problems).toEqual([]);
     await page.screenshot({ path: testInfo.outputPath(`mobile-${viewport.height}-copy.png`), fullPage: true });
+    // The contextual Quick Task island keeps its heading intact once revealed.
+    await page.getByRole("button", { name: /Zone 1.*idle/i }).click();
+    const quick = await box(page, "[data-testid=quick-task-heading]");
+    const island = await box(page, "[data-testid=quick-task-island]");
+    expect(quick.text).toBe("Quick Task");
+    expect(quick.lines).toBe(1);
+    inside(quick, island, "Quick Task heading");
+    await page.getByRole("button", { name: /Close Quick Task/i }).click();
+    expect(problems).toEqual([]);
   });
 }
 
@@ -157,7 +161,7 @@ test("dashboard order, field geometry, interactions and accessibility", async ({
   await page.goto("/");
   await page.waitForSelector("[data-testid=field-zone-6]");
   const order = await page.locator("main > [data-dashboard-section]").evaluateAll((nodes) => nodes.map((n) => n.getAttribute("data-dashboard-section")));
-  expect(order).toEqual(["quick-task", "field", "schedules", "history"]);
+  expect(order).toEqual(["field", "schedules", "history"]);
   const field = await box(page, "[data-testid=field]");
   expect(field.height).toBeGreaterThanOrEqual(380);
   expect(field.height).toBeLessThanOrEqual(465);

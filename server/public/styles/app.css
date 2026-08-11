@@ -288,10 +288,11 @@ button:disabled {
 
 /* dashboard grid: title + quick task row, field, schedules/history */
 .dashboard {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr);
   grid-template-areas:
-    "head quicktask"
+    "head head"
     "field field"
     "schedules history";
   gap: 26px 40px;
@@ -300,10 +301,6 @@ button:disabled {
 
 .dashboard .page-head {
   grid-area: head;
-}
-
-.dashboard [data-dashboard-section="quick-task"] {
-  grid-area: quicktask;
 }
 
 .dashboard [data-dashboard-section="field"] {
@@ -318,20 +315,82 @@ button:disabled {
   grid-area: history;
 }
 
-/* ------------------------------------------------------------- quick task */
+/* ------------------------------------------------------------- quick task island
+ * The Today Quick Task is contextual: the field itself is the zone selector.
+ * The island is an overlay anchored to the field's grid area on desktop and
+ * fixed above the bottom navigation on mobile — it never joins document flow,
+ * so field/schedules/history geometry is identical whether it is open or not. */
 
-.qt {
+.qt-island {
+  position: absolute;
+  grid-area: field;
+  right: 16px;
+  bottom: 14px;
+  z-index: 6;
+  width: min(340px, calc(100% - 32px));
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 14px;
-  padding: 12px 16px;
+  padding: 8px 12px 12px;
+  box-shadow: 0 10px 28px rgba(4, 10, 8, 0.55);
 }
 
-.qt-row {
+.qt-island[hidden] {
+  display: none;
+}
+
+.qt-island-head {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 10px;
+  min-width: 0;
+}
+
+.qt-island-head .qt-copy {
+  min-width: 0;
+}
+
+.qt-context {
+  display: block;
+  font-size: 10px;
+  line-height: 12px;
+  color: var(--text-muted);
+}
+
+.qt-island-zones {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--water);
+  white-space: nowrap;
+}
+
+.qt-close {
+  flex-shrink: 0;
+  min-width: 44px;
+  min-height: 44px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 15px;
+  border-radius: 10px;
+}
+
+.qt-close:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.qt-island-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.qt-island-controls .qt-start {
+  flex: 1 1 auto;
+  min-width: 44px;
+  padding: 0 12px;
 }
 
 .qt-heading {
@@ -345,28 +404,12 @@ button:disabled {
   margin-right: 4px;
 }
 
-.qt-note {
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-left: auto;
-  white-space: nowrap;
-}
-
-.qt-zones,
 .qt-durations {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
 }
 
-.qt-sep {
-  width: 1px;
-  align-self: stretch;
-  background: var(--line);
-  margin: 2px 4px;
-}
-
-.qt-zone,
 .qt-duration {
   min-width: 44px;
   min-height: 44px;
@@ -378,12 +421,10 @@ button:disabled {
   font-size: 14px;
 }
 
-.qt-zone:hover,
 .qt-duration:hover {
   border-color: var(--text-muted);
 }
 
-.qt-zone[aria-pressed="true"],
 .qt-duration[aria-pressed="true"] {
   border-color: var(--water);
   color: var(--water);
@@ -413,7 +454,7 @@ button:disabled {
 }
 
 .qt-hint {
-  margin: 10px 2px 0;
+  margin: 4px 2px 0;
   font-size: 11.5px;
   color: var(--text-muted);
 }
@@ -520,7 +561,11 @@ button:disabled {
 .sprinkler-number {
   font-family: var(--font-mono);
   font-size: 11px;
-  fill: #2c3d35;
+  fill: #dfe9e3;
+  stroke: #0a130f;
+  stroke-width: 2.6px;
+  stroke-linejoin: round;
+  paint-order: stroke;
   text-anchor: middle;
 }
 
@@ -1271,30 +1316,26 @@ button:disabled {
     flex: none;
   }
 
-  .dashboard [data-dashboard-section="quick-task"] {
-    min-height: 176px;
-  }
-
   .lawn-field {
     aspect-ratio: auto;
     width: 100%;
     height: 400px;
   }
 
-  .qt-zones {
-    display: grid;
-    grid-template-columns: repeat(6, 1fr);
-    width: 100%;
+  /* Contextual island floats above the bottom navigation and safe area;
+   * fixed positioning keeps the scrolling document geometry untouched. */
+  .qt-island {
+    position: fixed;
+    left: 10px;
+    right: 10px;
+    bottom: calc(58px + env(safe-area-inset-bottom, 0px) + 10px);
+    width: auto;
+    z-index: 30;
   }
 
   .qt-durations {
     display: grid;
     grid-template-columns: repeat(4, minmax(44px, 56px));
-  }
-
-  .qt-start {
-    width: 100%;
-    margin-left: 0;
   }
 
   .form-grid {

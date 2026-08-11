@@ -61,11 +61,9 @@ test("dashboard geometry follows approved desktop and mobile hierarchy", async (
   await page.goto("/");
   await page.waitForSelector("[data-testid=field-zone-6]");
   await expect(page.getByRole("heading", { name: "Today" })).toBeVisible();
-  const quickDesktop = await rect(page.locator("[data-testid=quick-task]"));
-  expect(quickDesktop.width).toBeGreaterThanOrEqual(598);
-  expect(quickDesktop.width).toBeLessThanOrEqual(608);
-  expect(quickDesktop.height).toBeGreaterThanOrEqual(50);
-  expect(quickDesktop.height).toBeLessThanOrEqual(56);
+  // The Quick Task bar no longer occupies the initial layout; the field is
+  // the Today selector and the island stays a hidden overlay.
+  await expect(page.locator("[data-testid=quick-task-island]")).toBeHidden();
   const fieldDesktop = await rect(page.locator("[data-testid=field]"));
   expect(fieldDesktop.width).toBeCloseTo(1140, 0);
   expect(fieldDesktop.height).toBeCloseTo(524, 0);
@@ -76,19 +74,15 @@ test("dashboard geometry follows approved desktop and mobile hierarchy", async (
     await page.reload();
     await page.waitForSelector("[data-testid=field-zone-6]");
     const order = await page.locator("main > [data-dashboard-section]").evaluateAll((nodes) => nodes.map((node) => node.dataset.dashboardSection));
-    expect(order).toEqual(["quick-task", "field", "schedules", "history"]);
-    const quick = await rect(page.locator("[data-testid=quick-task]"));
+    expect(order).toEqual(["field", "schedules", "history"]);
+    await expect(page.locator("[data-testid=quick-task-island]")).toBeHidden();
     const field = await rect(page.locator("[data-testid=field]"));
     const nav = await rect(page.locator(".mobile-nav"));
-    expect(quick.x).toBeCloseTo(0, 0);
-    expect(quick.width).toBeCloseTo(390, 0);
-    expect(quick.height).toBeGreaterThanOrEqual(176);
-    expect(quick.height).toBeLessThanOrEqual(184);
     expect(field.x).toBeCloseTo(0, 0);
     expect(field.width).toBeCloseTo(390, 0);
     expect(field.height).toBeCloseTo(400, 0);
-    expect(field.y).toBeGreaterThanOrEqual(288);
-    expect(field.y).toBeLessThanOrEqual(304);
+    expect(field.y).toBeGreaterThanOrEqual(108);
+    expect(field.y).toBeLessThanOrEqual(124);
     expect(nav.height).toBeGreaterThanOrEqual(58);
     await expect(page.locator("[data-testid=mobile-product-heading]")).toHaveText("Sprinkler system");
   }
@@ -262,7 +256,7 @@ for (const route of ["/", "/quick-task"]) {
       return intercept.continue();
     });
     await page.goto(route);
-    if (route === "/") await page.getByRole("button", { name: "Zone 2", exact: true }).click();
+    if (route === "/") await page.getByRole("button", { name: /Zone 2.*idle/i }).click();
     else await page.locator("#zone2").check();
     const start = page.getByRole("button", { name: route === "/" ? "Start" : "Start watering", exact: true });
     await start.click();
@@ -272,11 +266,15 @@ for (const route of ["/", "/quick-task"]) {
     await expect(start).toBeEnabled({ timeout: 2500 });
     await page.reload();
     const restored = page.getByRole("button", { name: route === "/" ? "Start" : "Start watering", exact: true });
-    if (route === "/") await expect(page.getByRole("button", { name: "Zone 2", exact: true })).toHaveAttribute("aria-pressed", "true");
+    if (route === "/") await expect(page.getByRole("button", { name: /Zone 2.*idle/i })).toHaveAttribute("aria-pressed", "true");
     else await expect(page.locator("#zone2")).toBeChecked();
     await expect(restored).toBeEnabled({ timeout: 2500 });
     await restored.click();
     await expect(page).toHaveURL(/\/$/);
+    // The same-key retry must land as one committed task before the test
+    // ends, so no create is still in flight across the fixture reset.
+    if (route === "/") await expect(page.locator("#fieldMutationFeedback")).toHaveText("Task added");
+    else await expect(page.getByRole("button", { name: /Zone 2.*queued/i })).toBeVisible();
     expect(requestIds).toHaveLength(2);
     expect(requestIds[0]).toBe(requestIds[1]);
   });
@@ -289,7 +287,7 @@ for (const route of ["/", "/quick-task"]) {
       await page.setViewportSize(viewport);
       await page.request.post("/__test/controller", { data: { mode: "post-controller-overload", tasks: [] } });
       await page.goto(route);
-      if (route === "/") await page.getByRole("button", { name: "Zone 3", exact: true }).click();
+      if (route === "/") await page.getByRole("button", { name: /Zone 3.*idle/i }).click();
       else await page.locator("#zone3").check();
       const start = page.getByRole("button", { name: route === "/" ? "Start" : "Start watering", exact: true });
       await start.click();
@@ -329,7 +327,7 @@ for (const route of ["/", "/quick-task"]) {
           return intercept.fulfill({ status: outcome.status, contentType: "application/json", body: JSON.stringify(outcome.body) });
         });
         await page.goto(route);
-        if (route === "/") await page.getByRole("button", { name: "Zone 1", exact: true }).click();
+        if (route === "/") await page.getByRole("button", { name: /Zone 1.*idle/i }).click();
         else await page.locator("#zone1").check();
         const start = page.getByRole("button", { name: route === "/" ? "Start" : "Start watering", exact: true });
         await start.click();
@@ -338,7 +336,7 @@ for (const route of ["/", "/quick-task"]) {
           await expect(feedback).toContainText(/conflict.*refresh.*edit/i);
           if (route === "/") {
             await expect(page.locator("[data-testid=controller-freshness]")).toHaveText("Controller status current");
-            await page.getByRole("button", { name: "Zone 2", exact: true }).click();
+            await page.getByRole("button", { name: /Zone 2.*idle/i }).click();
           } else {
             await page.locator("#zone2").check();
           }
@@ -356,6 +354,10 @@ for (const route of ["/", "/quick-task"]) {
           const restored = page.getByRole("button", { name: route === "/" ? "Start" : "Start watering", exact: true });
           await expect(restored).toBeEnabled({ timeout: 2500 });
           await restored.click();
+          // The retried create must be durably visible before the test ends,
+          // so no create is still in flight across the fixture reset.
+          if (route === "/") await expect(page.locator("#fieldMutationFeedback")).toHaveText("Task added");
+          else await expect(page).toHaveURL(/\/$/);
           expect(requestIds).toHaveLength(2);
           expect(requestIds[0]).toBe(requestIds[1]);
         }
@@ -374,7 +376,7 @@ for (const route of ["/", "/quick-task"]) {
     await page.route("**/api/operations/**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ operationId: requestId, state: "rejected", outcome: "rejected", recovery: "Controller rejected the request." }) }));
     await page.goto(route);
     if (route === "/") {
-      await page.getByRole("button", { name: "Zone 2", exact: true }).click();
+      await page.getByRole("button", { name: /Zone 2.*idle/i }).click();
       await page.getByRole("button", { name: "Start", exact: true }).click();
       await expect(page.locator("#quickMessage")).toContainText(/rejected.*edit|edit.*rejected/i);
       await expect(page.locator("[data-testid=controller-freshness]")).toHaveText("Controller status current");
@@ -661,7 +663,7 @@ test("task state reconciles by polling while preserving stale last-known state",
 test("lost manual response is explicit outcome unknown and never invites blind retry", async ({ page }) => {
   await page.goto("/");
   await page.request.post("/__test/controller", { data: { mode: "lost-response", tasks: [] } });
-  await page.getByRole("button", { name: "Zone 1", exact: true }).click();
+  await page.getByRole("button", { name: /Zone 1.*idle/i }).click();
   await page.getByRole("button", { name: "Start", exact: true }).click();
   await expect(page.locator("#quickMessage")).toContainText(/outcome unknown/i);
   await expect(page.locator("#quickMessage")).not.toContainText(/try again|retry/i);
@@ -674,14 +676,22 @@ for (const route of ["/", "/quick-task"]) {
       await page.setViewportSize(viewport);
       await page.goto(route);
       await page.waitForLoadState("networkidle");
+      if (route === "/") {
+        // Contextual entry point: no Quick Task copy or controls exist until
+        // a real field sprinkler is selected.
+        await expect(page.getByText("Runs once, right now", { exact: true })).toBeHidden();
+        await expect(page.getByText("Pick at least one zone to start · durations in minutes", { exact: true })).toBeHidden();
+        await page.getByRole("button", { name: /Zone 1.*idle/i }).click();
+        await expect(page.locator("[data-testid=quick-task-island]")).toBeVisible();
+      }
       await expect(page.getByText("Runs once, right now", { exact: true })).toBeVisible();
       await expect(page.getByText("Pick at least one zone to start · durations in minutes", { exact: true })).toBeVisible();
 
       const presetNames = await page.locator(route === "/" ? ".qt-duration" : ".preset").allTextContents();
       expect(presetNames.map((text) => Number.parseInt(text, 10))).toEqual([5, 15, 30, 60]);
       if (route === "/") {
-        const panel = await rect(page.locator("[data-testid=quick-task]"));
-        for (const control of await page.locator(".qt-zone,.qt-duration,.qt-start").all()) {
+        const panel = await rect(page.locator("[data-testid=quick-task-island]"));
+        for (const control of await page.locator(".qt-duration,.qt-start,.qt-close").all()) {
           const bounds = await rect(control);
           expect(bounds.x).toBeGreaterThanOrEqual(panel.x);
           expect(bounds.y).toBeGreaterThanOrEqual(panel.y);
@@ -692,18 +702,23 @@ for (const route of ["/", "/quick-task"]) {
         expect(copyClips).toBe(false);
       }
       const start = page.getByRole("button", { name: route === "/" ? "Start" : "Start watering", exact: true });
-      await expect(start).toBeDisabled();
 
       if (route === "/") {
         await expect(page.getByRole("button", { name: "15 minutes" })).toHaveAttribute("aria-pressed", "true");
-        const zone = page.getByRole("button", { name: "Zone 1", exact: true });
-        await zone.click();
         await expect(start).toBeEnabled();
         await page.request.post("/__test/controller", { data: { mode: "offline" } });
         await page.getByRole("button", { name: /Refresh controller status/i }).click();
         await expect(start).toBeDisabled();
-        await zone.click();
+        // Recovery re-enables Start from real state, and deselecting the
+        // zone hides every Quick Task control again.
+        await page.request.post("/__test/controller", { data: { mode: "online" } });
+        await page.getByRole("button", { name: /Refresh controller status/i }).click();
+        await expect(start).toBeEnabled();
+        await page.getByRole("button", { name: /Zone 1.*idle/i }).click();
+        await expect(page.locator("[data-testid=quick-task-island]")).toBeHidden();
+        await expect(start).toBeHidden();
       } else {
+        await expect(start).toBeDisabled();
         await expect(page.locator("#duration")).toHaveValue("15");
         const zone = page.locator("#zone1");
         await zone.check();
@@ -711,8 +726,8 @@ for (const route of ["/", "/quick-task"]) {
         await page.request.post("/__test/controller", { data: { mode: "offline" } });
         await expect(start).toBeDisabled({ timeout: 5000 });
         await zone.uncheck();
+        await expect(start).toBeDisabled();
       }
-      await expect(start).toBeDisabled();
     });
   }
 }

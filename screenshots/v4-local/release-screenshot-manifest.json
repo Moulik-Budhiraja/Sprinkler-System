@@ -5,39 +5,34 @@
     "Living Yard",
     "Sprinkler system",
     "Status",
-    "Quick Task",
-    "5m",
-    "15m",
-    "30m",
-    "60m",
     "Schedules",
     "History"
   ],
   "artifacts": {
     "desktop-1440-copy.png": {
       "viewport": [1440, 900],
-      "dimensions": [1440, 937],
-      "sha256": "2ce1ccd7c187279057ee95e8bb52bddaed11ce8bab061289713a831a4aa3af31"
+      "dimensions": [1440, 900],
+      "sha256": "472b525617243ac7397df7adfdb07dbe8ca71befd76882dfcab23504f3594392"
     },
     "desktop-1440-standalone.png": {
       "viewport": [1440, 900],
-      "dimensions": [1440, 965],
-      "sha256": "06e1c42d92c2aab3d9cba831dbeb63eff0b439d3077fbd993be028a54cdca983"
+      "dimensions": [1440, 900],
+      "sha256": "472b525617243ac7397df7adfdb07dbe8ca71befd76882dfcab23504f3594392"
     },
     "mobile-844-copy.png": {
       "viewport": [390, 844],
-      "dimensions": [390, 1047],
-      "sha256": "6357bf161a3c769b627811e70f508338eab7882e2aa292abaef8377f4b464a1b"
+      "dimensions": [390, 1023],
+      "sha256": "b6f3d12bc0f7568636af2db69811d8216a9841bcf4852355dd039ad652aa637c"
     },
     "mobile-1067-copy.png": {
       "viewport": [390, 1067],
       "dimensions": [390, 1067],
-      "sha256": "eba430da0e79c27b93a86a0f401b414e12df5f2c608a5f1fe6c603af934943da"
+      "sha256": "f2502cec4f230ba1875610ece1e76257d324417054a4bf3d26d5951e405647a5"
     },
     "mobile-390x844-standalone.png": {
       "viewport": [390, 844],
-      "dimensions": [390, 1047],
-      "sha256": "6357bf161a3c769b627811e70f508338eab7882e2aa292abaef8377f4b464a1b"
+      "dimensions": [390, 1023],
+      "sha256": "b6f3d12bc0f7568636af2db69811d8216a9841bcf4852355dd039ad652aa637c"
     }
   }
 }

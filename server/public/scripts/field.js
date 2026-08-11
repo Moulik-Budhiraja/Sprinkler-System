@@ -249,8 +249,11 @@
       zones: new Map(),
       pendingTasks: new Map(),
       selected: null,
+      idleSelected: new Set(),
+      idleLocked: false,
       layout: null,
     };
+    const contextualSelection = typeof handlers.onIdleSelectionChange === "function";
 
     const mqDesktop = window.matchMedia(LAYOUTS.desktop.media);
 
@@ -339,8 +342,29 @@
       }
     }
 
+    /* Zones the controller reports as carrying a task (active/queued) or that
+     * hold a local pending create are never eligible for a new Quick Task. */
+    function idleEligible(z) {
+      const s = state.zones.get(z);
+      return !s || s.status === "idle";
+    }
+
+    function idleSelectionList() {
+      return [...state.idleSelected].sort((a, b) => a - b);
+    }
+
     function toggleSelect(z) {
       if (state.offline || state.stale) return;
+      if (contextualSelection && idleEligible(z)) {
+        // Idle zones feed the contextual Quick Task selection; ownership of
+        // status/Stop/Remove activation stays with the popover path below.
+        if (state.idleLocked) return;
+        if (state.idleSelected.has(z)) state.idleSelected.delete(z);
+        else state.idleSelected.add(z);
+        applyState();
+        handlers.onIdleSelectionChange(idleSelectionList(), "toggle");
+        return;
+      }
       if (state.selected === z) {
         clearSelection();
         return;
@@ -350,6 +374,27 @@
       const wrap = wrapFor(z);
       wrap.classList.add("is-selected");
       openPopover(z);
+    }
+
+    function setIdleSelection(zones, reason = "restore") {
+      state.idleSelected = new Set(
+        zones.filter((z) => Number.isInteger(z) && z >= 1 && z <= VISIBLE_ZONE_COUNT)
+      );
+      applyState();
+      handlers.onIdleSelectionChange?.(idleSelectionList(), reason);
+    }
+
+    function clearIdleSelection({ refocus = false } = {}) {
+      if (!state.idleSelected.size) return;
+      const first = idleSelectionList()[0];
+      state.idleSelected.clear();
+      applyState();
+      if (refocus) wrapFor(first)?.querySelector(".field-zone")?.focus();
+      handlers.onIdleSelectionChange?.([], "clear");
+    }
+
+    function setIdleLocked(locked) {
+      state.idleLocked = Boolean(locked);
     }
 
     function openPopover(z) {
@@ -428,6 +473,17 @@
 
     function applyState() {
       container.classList.toggle("offline", state.offline);
+      // A zone that now carries a controller task can never stay in a new
+      // Quick Task selection; zones "starting" from our own pending create
+      // remain selected so recovery copy stays anchored to the island.
+      let idlePruned = false;
+      for (const z of [...state.idleSelected]) {
+        const s = state.zones.get(z);
+        if (s && s.status !== "idle" && s.status !== "starting") {
+          state.idleSelected.delete(z);
+          idlePruned = true;
+        }
+      }
       for (const entry of state.layout.zones) {
         const wrap = wrapFor(entry.z);
         if (!wrap) continue;
@@ -439,10 +495,20 @@
           .trim();
         const pendingKind = s.task ? state.pendingTasks.get(String(s.task.id)) : null;
         wrap.classList.add(`is-${pendingKind ? "stopping" : s.status}`);
+        wrap.classList.toggle(
+          "is-selected",
+          state.idleSelected.has(entry.z) || state.selected === entry.z
+        );
         const btn = wrap.querySelector(".field-zone");
         const labelState = pendingKind === "stop" ? { ...s, status: "stopping" } : s;
         btn.setAttribute("aria-label", headLabel(entry.z, CHARACTERS[entry.kind].name, labelState));
         btn.disabled = state.offline || state.stale;
+        if (contextualSelection && !state.offline && !state.stale
+          && (idleEligible(entry.z) || state.idleSelected.has(entry.z))) {
+          btn.setAttribute("aria-pressed", String(state.idleSelected.has(entry.z)));
+        } else {
+          btn.removeAttribute("aria-pressed");
+        }
         const waterline = wrap.querySelector(".waterline");
         if (s.status === "active" || s.status === "stopping") {
           waterline.removeAttribute("aria-hidden");
@@ -478,6 +544,7 @@
           pop.classList.toggle("is-stopping", pending);
         }
       }
+      if (idlePruned) handlers.onIdleSelectionChange?.(idleSelectionList(), "reconcile");
     }
 
     /* update() receives truthful controller state only:
@@ -518,6 +585,9 @@
           .querySelector("[data-testid=zone-action-popover]")
           ?.contains(document.activeElement);
         clearSelection({ refocus: Boolean(withinPopover) });
+        // This Escape belongs to the popover; the contextual island keeps
+        // its selection until a further, unconsumed Escape.
+        event.preventDefault();
       }
     });
 
@@ -531,7 +601,17 @@
     });
 
     build();
-    return { update, clearSelection, clearPendingTask, restorePendingTask, get layoutName() { return mqDesktop.matches ? "desktop" : "mobile"; } };
+    return {
+      update,
+      clearSelection,
+      clearPendingTask,
+      restorePendingTask,
+      setIdleSelection,
+      clearIdleSelection,
+      setIdleLocked,
+      get idleSelection() { return idleSelectionList(); },
+      get layoutName() { return mqDesktop.matches ? "desktop" : "mobile"; },
+    };
   }
 
   window.LivingYard = {

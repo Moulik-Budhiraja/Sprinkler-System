@@ -84,16 +84,19 @@ for (const viewport of viewports) {
   });
 }
 
-test("desktop dashboard Quick Task controls are distinct 44px targets inside the dense panel", async ({ page }) => {
+test("desktop Quick Task island controls are distinct 44px targets inside the island", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
-  const panel = page.locator("[data-testid=quick-task]");
+  await page.waitForSelector("[data-testid=field-zone-6]");
+  await page.getByRole("button", { name: /Zone 1.*idle/i }).click();
+  const panel = page.locator("[data-testid=quick-task-island]");
+  await expect(panel).toBeVisible();
   const panelBox = await panel.boundingBox();
-  const controls = await page.locator(".qt-zone,.qt-duration,.qt-start").evaluateAll((nodes) => nodes.map((node) => {
+  const controls = await page.locator(".qt-duration,.qt-start,.qt-close").evaluateAll((nodes) => nodes.map((node) => {
     const box = node.getBoundingClientRect();
     return { name: node.getAttribute("aria-label") || node.textContent.trim(), x: box.x, y: box.y, right: box.right, bottom: box.bottom, width: box.width, height: box.height };
   }));
-  expect(controls).toHaveLength(11);
+  expect(controls).toHaveLength(6);
   expect(controls.filter(({ width, height }) => width < 44 || height < 44), "Quick Task undersized controls").toEqual([]);
   for (const control of controls) {
     expect(control.x, `${control.name}: left containment`).toBeGreaterThanOrEqual(panelBox.x);
@@ -117,7 +120,8 @@ for (const viewport of viewports) {
     await page.goto("/");
     await page.waitForSelector("[data-testid=field-zone-6]");
 
-    await page.getByRole("button", { name: "Zone 1", exact: true }).click();
+    await page.getByRole("button", { name: /Zone 1.*idle/i }).click();
+    await expect(page.locator("[data-testid=quick-task-island]")).toBeVisible();
     await page.getByRole("button", { name: "5 minutes", exact: true }).click();
     await expectTargets(page, `selected Quick Task at ${viewport.width}x${viewport.height}`);
     await expectExactNoHorizontalOverflow(page, `selected Quick Task at ${viewport.width}x${viewport.height}`);

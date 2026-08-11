@@ -82,11 +82,58 @@ function updateQuickTaskSubmit() {
   const submit = document.querySelector("#quickTaskForm [type=submit]");
   if (!submit) return;
   const validZones = [...selectedZones].every((zone) => Number.isInteger(zone) && zone >= 1 && zone <= VISIBLE_ZONE_COUNT);
-  submit.disabled = !selectedZones.size || !validZones || !quickTaskControllerAvailable || quickTaskAmbiguous || quickTaskConflict || quickTaskRetryWaiting;
+  submit.disabled = !selectedZones.size || !validZones || !quickTaskControllerAvailable || quickTaskAmbiguous || quickTaskConflict || quickTaskRetryWaiting || !pendingManualSelectionMatchesPayload();
 }
 
 function lockQuickTask(locked) {
-  document.querySelectorAll("#quickTaskForm .qt-zone, #quickTaskForm .qt-duration").forEach((control) => { control.disabled = locked; });
+  document.querySelectorAll("#quickTaskForm .qt-duration, #quickTaskForm .qt-close").forEach((control) => { control.disabled = locked; });
+  field?.setIdleLocked(locked);
+}
+
+function describeSelection(zones) {
+  if (!zones.length) return "";
+  const label = window.LivingYard.listZones(zones);
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+function syncQuickTaskIsland() {
+  const island = document.querySelector("[data-testid=quick-task-island]");
+  if (!island) return;
+  const zones = [...selectedZones].sort((a, b) => a - b);
+  // A pending same-key retry must always describe its complete immutable
+  // payload, even while the controller temporarily prunes a busy zone.
+  const summaryZones = pendingManualMutation
+    ? [...pendingManualMutation.payload.zones].sort((a, b) => a - b)
+    : zones;
+  const summary = $("#quickTaskZones");
+  if (summary) summary.textContent = describeSelection(summaryZones);
+  island.hidden = zones.length === 0 && !pendingManualMutation;
+  if (island.hidden) {
+    const message = $("#quickMessage");
+    const persistentFeedback = $("#fieldMutationFeedback");
+    if (message?.textContent && persistentFeedback) persistentFeedback.textContent = message.textContent;
+    if (message) message.textContent = "";
+  }
+}
+
+/* The field owns idle-zone toggling; this mirror keeps the island truthful. */
+function handleIdleSelectionChange(zones, reason) {
+  selectedZones.clear();
+  zones.forEach((zone) => selectedZones.add(zone));
+  if (reason === "toggle") quickTaskConflict = false;
+  syncQuickTaskIsland();
+  updateQuickTaskSubmit();
+}
+
+function pendingManualSelectionMatchesPayload() {
+  if (!pendingManualMutation) return true;
+  const zones = pendingManualMutation.payload.zones;
+  return selectedZones.size === zones.length && zones.every((zone) => selectedZones.has(zone));
+}
+
+function pendingManualZonesAreIdle() {
+  const zones = pendingManualMutation?.payload.zones || [];
+  return zones.length > 0 && zones.every((zone) => !currentTasks.some((task) => task.zones.includes(zone)));
 }
 
 function allowManualRetry(seconds = 0) {
@@ -97,6 +144,23 @@ function allowManualRetry(seconds = 0) {
   if (seconds > 0) setTimeout(enable, seconds * 1000); else enable();
 }
 
+/* Successful start: the pending create is durable, so the contextual
+ * selection retires and success is announced from the persistent field
+ * live region (the island hides once nothing is selected). */
+async function completeQuickTaskStart() {
+  manualMutationStore.clear();
+  pendingManualMutation = null;
+  quickTaskAmbiguous = false;
+  lockQuickTask(false);
+  const message = $("#quickMessage");
+  if (message) message.textContent = "";
+  field?.clearIdleSelection();
+  syncQuickTaskIsland();
+  const announce = taskDeleteFeedback();
+  if (announce) announce.textContent = "Task added";
+  await refreshTasks();
+}
+
 async function reconcileManualMutation() {
   quickTaskAmbiguous = true;
   lockQuickTask(true);
@@ -105,13 +169,7 @@ async function reconcileManualMutation() {
   message.textContent = "Outcome unknown · checking the durable operation. No new request will be sent.";
   const result = await window.MutationRecovery.reconcile(pendingManualMutation.requestId);
   if (result.kind === "committed") {
-    manualMutationStore.clear();
-    pendingManualMutation = null;
-    selectedZones.clear();
-    lockQuickTask(false);
-    quickTaskAmbiguous = false;
-    message.textContent = "Task added";
-    await refreshTasks();
+    await completeQuickTaskStart();
   } else if (result.kind === "rejected") {
     manualMutationStore.clear();
     pendingManualMutation = null;
@@ -119,6 +177,7 @@ async function reconcileManualMutation() {
     quickTaskConflict = true;
     lockQuickTask(false);
     message.textContent = "Start rejected · task unchanged. Refresh status or edit before a deliberate new Start.";
+    syncQuickTaskIsland();
     updateQuickTaskSubmit();
   } else if (result.kind === "not_found" || result.kind === "not_applied") {
     allowManualRetry();
@@ -323,6 +382,9 @@ async function refreshTasks() {
     quickTaskControllerAvailable = true;
     setControllerStatus("online");
     field.update({ tasks: currentTasks, startingZones, stale: false });
+    if (pendingManualMutation && !pendingManualSelectionMatchesPayload() && pendingManualZonesAreIdle()) {
+      field.setIdleSelection(pendingManualMutation.payload.zones, "restore");
+    }
   } catch (error) {
     quickTaskControllerAvailable = false;
     const busy = error?.data?.kind === "read_overload";
@@ -343,24 +405,10 @@ function schedulePoll() {
 }
 
 function setupQuickTask() {
-  const zones = $("#quickZones");
   const durations = $("#quickDurations");
   const form = $("#quickTaskForm");
-  if (!zones || !durations || !form) return;
+  if (!durations || !form) return;
   const submit = form.querySelector("[type=submit]");
-  for (let zone = 1; zone <= VISIBLE_ZONE_COUNT; zone += 1) {
-    const button = node("button", "qt-zone", String(zone));
-    button.type = "button";
-    button.setAttribute("aria-label", `Zone ${zone}`);
-    button.setAttribute("aria-pressed", "false");
-    button.addEventListener("click", () => {
-      quickTaskConflict = false;
-      selectedZones.has(zone) ? selectedZones.delete(zone) : selectedZones.add(zone);
-      button.setAttribute("aria-pressed", String(selectedZones.has(zone)));
-      updateQuickTaskSubmit();
-    });
-    zones.append(button);
-  }
   for (const minutes of QUICK_TASK_DURATIONS) {
     const button = node("button", "qt-duration", `${minutes}m`);
     button.type = "button";
@@ -397,13 +445,7 @@ function setupQuickTask() {
     startingZones = [];
     field?.update({ tasks: currentTasks, startingZones, stale: false });
     if (result.kind === "committed") {
-      manualMutationStore.clear();
-      pendingManualMutation = null;
-      selectedZones.clear();
-      lockQuickTask(false);
-      zones.querySelectorAll("button").forEach((button) => button.setAttribute("aria-pressed", "false"));
-      message.textContent = "Task added";
-      await refreshTasks();
+      await completeQuickTaskStart();
     } else if (result.kind === "not_applied") {
       pendingManualMutation.retryAt = Date.now() + result.retryAfter * 1000;
       manualMutationStore.save(pendingManualMutation);
@@ -416,6 +458,7 @@ function setupQuickTask() {
       quickTaskConflict = true;
       lockQuickTask(false);
       message.textContent = `Request conflict · ${result.data.error}. Refresh status or edit the task before starting again.`;
+      syncQuickTaskIsland();
     } else if (result.kind === "outcome_unknown" || result.kind === "network_ambiguous") {
       quickTaskAmbiguous = true;
       message.textContent = "Outcome unknown · reconciling the durable operation. No new request will be sent.";
@@ -426,16 +469,31 @@ function setupQuickTask() {
       quickTaskAmbiguous = false;
       lockQuickTask(false);
       message.textContent = `Start failed · ${result.data.error || "request rejected"}`;
+      syncQuickTaskIsland();
     }
     updateQuickTaskSubmit();
   });
 
+  $("#quickTaskClose")?.addEventListener("click", () => {
+    field?.clearIdleSelection({ refocus: true });
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !field || !selectedZones.size) return;
+    // A Stop/Remove popover owns Escape while it is open (the field marks a
+    // consumed Escape via preventDefault); a pending create keeps its
+    // selection so recovery stays anchored to the same payload.
+    if (event.defaultPrevented) return;
+    if (document.querySelector("[data-testid=zone-action-popover]")) return;
+    if (pendingManualMutation || quickTaskAmbiguous || quickTaskRetryWaiting) return;
+    const island = document.querySelector("[data-testid=quick-task-island]");
+    field.clearIdleSelection({ refocus: Boolean(island?.contains(document.activeElement)) });
+  });
+
   if (pendingManualMutation) {
-    selectedZones.clear();
-    pendingManualMutation.payload.zones.forEach((zone) => selectedZones.add(zone));
     selectedDuration = pendingManualMutation.payload.runTime;
-    zones.querySelectorAll("button").forEach((button, index) => button.setAttribute("aria-pressed", String(selectedZones.has(index + 1))));
     durations.querySelectorAll("button").forEach((button) => button.setAttribute("aria-pressed", String(Number.parseInt(button.textContent, 10) === selectedDuration)));
+    field?.setIdleSelection(pendingManualMutation.payload.zones, "restore");
     lockQuickTask(true);
     if (Number.isFinite(pendingManualMutation.retryAt)) allowManualRetry(Math.max(0, (pendingManualMutation.retryAt - Date.now()) / 1000));
     else void reconcileManualMutation();
@@ -444,7 +502,7 @@ function setupQuickTask() {
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 function taskSequence(schedule) {
-  return (schedule.tasks || []).map((task, index) => `${index + 1}. Zone${task.zones.length === 1 ? "" : "s"} ${task.zones.join(", ")} · ${task.runTime} min`).join("  ");
+  return (schedule.tasks || []).map((task, index) => `${index + 1}. Zone${task.zones.length === 1 ? "" : "s"} ${task.zones.join(", ")} · ${task.runTime} min`).join("; ");
 }
 
 function scheduleRow(id, schedule, dedicated) {
@@ -465,7 +523,7 @@ function scheduleRow(id, schedule, dedicated) {
   days.dataset.scheduleDays = "";
   const sequence = node("div", "schedule-sequence", taskSequence(schedule));
   sequence.dataset.scheduleSequence = "";
-  const last = node("div", "schedule-last", `Last run ${relativeTime(schedule.lastRun)}`);
+  const last = node("div", "schedule-last", Number.isFinite(schedule.lastRun) ? `Last run ${relativeTime(schedule.lastRun)}` : "Not yet run");
   last.dataset.scheduleLastRun = "";
   const actions = node("div", "schedule-actions");
   const edit = node("a", "text-action", "Edit");
@@ -555,10 +613,14 @@ async function refreshHistory() {
 document.addEventListener("DOMContentLoaded", () => {
   const fieldElement = $("#sprinklerField");
   if (fieldElement && window.LivingYard) {
-    field = window.LivingYard.renderField(fieldElement, {
+    const fieldHandlers = {
       onStop: (task) => stopTask(task, "stop"),
       onRemove: (task) => stopTask(task, "remove"),
-    });
+    };
+    // Only the Today dashboard turns idle field zones into a Quick Task
+    // selector; the status route stays glance-and-stop only.
+    if ($("#quickTaskForm")) fieldHandlers.onIdleSelectionChange = handleIdleSelectionChange;
+    field = window.LivingYard.renderField(fieldElement, fieldHandlers);
   }
   setupQuickTask();
   if (field) {
