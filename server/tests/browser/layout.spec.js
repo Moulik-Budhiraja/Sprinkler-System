@@ -60,7 +60,7 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
 }
 
 for (const width of [320, 375, 390, 393, 430]) {
-  test(`mobile scroll viewport keeps all functional content outside bottom navigation at ${width}x844`, async ({ page }) => {
+  test(`mobile document scroll keeps all functional content reachable above bottom navigation at ${width}x844`, async ({ page }) => {
     await page.setViewportSize({ width, height: 844 });
     await page.goto("/");
     await page.waitForSelector("[data-testid=field-zone-6]");
@@ -68,32 +68,33 @@ for (const width of [320, 375, 390, 393, 430]) {
       const result = await page.evaluate(() => {
         const main = document.querySelector("main");
         const nav = document.querySelector(".mobile-nav");
-        const mainRect = main.getBoundingClientRect();
         const navRect = nav.getBoundingClientRect();
-        const overlap = Math.min(mainRect.bottom, navRect.bottom) - Math.max(mainRect.top, navRect.top) > 0.5 &&
-          Math.min(mainRect.right, navRect.right) - Math.max(mainRect.left, navRect.left) > 0.5;
         return {
-          overlap,
-          mainBottom: mainRect.bottom,
-          navTop: navRect.top,
-          overflowY: getComputedStyle(main).overflowY,
-          scrollHeight: main.scrollHeight,
-          clientHeight: main.clientHeight,
+          mainOverflowY: getComputedStyle(main).overflowY,
+          navPosition: getComputedStyle(nav).position,
+          navBottom: navRect.bottom,
+          documentScrollable: document.documentElement.scrollHeight > document.documentElement.clientHeight,
+          viewportHeight: document.documentElement.clientHeight,
         };
       });
-      expect(result.overlap, `${stage}: main viewport intersects navigation`).toBe(false);
-      expect(result.mainBottom, `${stage}: main ends above navigation`).toBeLessThanOrEqual(result.navTop + 0.5);
-      expect(result.overflowY, `${stage}: content uses its own reachable flow`).toBe("auto");
-      expect(result.scrollHeight, `${stage}: dashboard remains scrollable`).toBeGreaterThan(result.clientHeight);
+      // One natural document scroll: no nested pane, navigation pinned to
+      // the viewport bottom.
+      expect(result.mainOverflowY, `${stage}: main is not a nested scroll pane`).toBe("visible");
+      expect(result.navPosition, `${stage}: navigation stays fixed`).toBe("fixed");
+      expect(Math.abs(result.navBottom - result.viewportHeight), `${stage}: navigation hugs the viewport bottom`).toBeLessThanOrEqual(0.5);
+      expect(result.documentScrollable, `${stage}: dashboard remains scrollable`).toBe(true);
     };
     await geometry("initial");
-    await page.locator("main").evaluate((main) => { main.scrollTop = Math.floor(main.scrollHeight / 2); });
+    await page.evaluate(() => window.scrollTo(0, Math.floor(document.documentElement.scrollHeight / 2)));
     await geometry("mid-scroll");
     const refresh = page.getByRole("button", { name: "Refresh controller status" });
     await refresh.focus();
     await refresh.evaluate((node) => node.scrollIntoView({ block: "nearest" }));
     await expect(refresh).toBeFocused();
     await geometry("keyboard-focus");
+    const refreshRect = await refresh.boundingBox();
+    const navRect = await page.locator(".mobile-nav").boundingBox();
+    expect(refreshRect.y + refreshRect.height, "focused control clear of navigation").toBeLessThanOrEqual(navRect.y + 0.5);
     await page.locator("#fieldMutationFeedback").evaluate((node) => {
       node.textContent = "Mutation outcome unknown · check Status";
       node.scrollIntoView({ block: "nearest" });
@@ -167,10 +168,13 @@ test("dashboard order, field geometry, interactions and accessibility", async ({
   expect(field.height).toBeLessThanOrEqual(465);
   const nums = await page.locator("[data-testid=field-zone] .sprinkler-number").allTextContents();
   expect(nums).toEqual(["1", "2", "3", "4", "5", "6"]);
-  await page.getByRole("button", { name: /Zone 4.*Stop watering task/i }).click();
-  await expect(page.locator("[data-testid=zone-action-popover]")).toBeVisible();
+  // The running zone always shows its own anchored Stop control; selecting
+  // the zone traces its silhouette and Escape releases the selection.
+  await expect(page.locator("[data-testid=field-zone-4] .zone-dock [data-testid=zone-stop]")).toBeVisible();
+  await page.getByRole("button", { name: /Zone 4.*watering/i }).click();
+  await expect(page.locator("[data-testid=field-zone-4]")).toHaveClass(/is-selected/);
   await page.keyboard.press("Escape");
-  await expect(page.locator("[data-testid=zone-action-popover]")).toBeHidden();
+  await expect(page.locator("[data-testid=field-zone-4]")).not.toHaveClass(/is-selected/);
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations).toEqual([]);
   const navLinks = page.locator(".mobile-nav a");

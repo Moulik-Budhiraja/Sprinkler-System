@@ -5,112 +5,255 @@
 (() => {
   const VISIBLE_ZONE_COUNT = 6;
 
+  /* Selection outline in rendered CSS pixels: the ring hugs the exact
+   * silhouette at OUTLINE_GAP_PX and is OUTLINE_RING_PX thick; the halo
+   * glows just beyond it. Stroke widths are recomputed per rendered scale. */
+  const OUTLINE_GAP_PX = 4;
+  const OUTLINE_RING_PX = 2.2;
+  const OUTLINE_HALO_PX = 3;
+
+  /* Check badge in rendered CSS pixels: the disc centre sits BADGE_DIST_PX
+   * from the nearest point of the physical silhouette along the up-left
+   * diagonal, and the disc renders at a constant BADGE_RADIUS_PX. Both are
+   * CSS-pixel quantities applied per rendered scale, so the badge keeps one
+   * visually constant relation to the silhouette at every zone size,
+   * viewport and zoom. The distance is derived from the PAINTED extent:
+   * the disc's stroke overhangs the geometric radius by half its width, and
+   * the painted stroke edge keeps an intentional 2 CSS px clearance from
+   * the silhouette — pinning the disc onto the outline's halo corner. */
+  const BADGE_RADIUS_PX = 7;
+  const BADGE_STROKE_PX = 1.5; // .anchor-disc stroke width (app.css)
+  // 2.4: the intent is >=2px painted; desktop DPR1 rasterisation erodes
+  // the painted stroke edge by up to ~0.6px (audited 1.41 at intent 2.0),
+  // so the constructed clearance carries that margin — live floor 1.6
+  // then holds at every scale/DPR/engine with ~0.2px to spare.
+  const BADGE_PAINT_CLEARANCE_PX = 2.4;
+  const BADGE_DIST_PX = BADGE_RADIUS_PX + BADGE_STROKE_PX / 2 + BADGE_PAINT_CLEARANCE_PX;
+  const BADGE_DIR = { x: -Math.SQRT1_2, y: -Math.SQRT1_2 };
+
   /* ------------------------------------------------------------- characters
    * One grammar — riser, collar, swivel head, nozzle — six silhouettes.
-   * Canvas is 200x150 with the ground line at y=132. Each entry provides its
-   * body markup, an organic contour path (never a rectangle), the nozzle
-   * point where spray leaves, the spray direction and an anchor-check spot.
-   */
+   * Canvas is 200x150 with the ground line at y=132. Every physical part is
+   * structured data so the body art, the selection outline and the anchored
+   * controls all derive from the same geometry in the same coordinate
+   * system. Spray, shadow and labels are never part of the silhouette. */
+  const rotation = (a, cx, cy) => ({ a, cx, cy });
+
   const CHARACTERS = {
     sprout: {
       name: "the sprout",
       numeral: { x: 100, y: 112 },
       nozzle: { x: 114, y: 72 },
       dir: 1,
-      anchor: { x: 76, y: 58 },
-      body: `
-        <g class="char-pose" transform="rotate(-4 100 132)">
-          <rect x="95" y="78" width="10" height="54" rx="4" class="c-riser"/>
-          <rect x="91" y="88" width="18" height="7" rx="3" class="c-collar"/>
-          <rect x="88" y="66" width="23" height="12" rx="5" class="c-head"/>
-          <rect x="108" y="69" width="8" height="5" rx="2" class="c-nozzle"/>
-        </g>`,
-      contour:
-        "M72,139 Q66,130 78,126 Q82,110 84,92 Q80,84 88,80 Q84,62 92,60 L112,60 Q122,62 120,72 Q114,78 112,86 Q110,112 116,124 Q130,128 126,139 Q100,146 72,139 Z",
+      pose: rotation(-4, 100, 132),
+      parts: [
+        { kind: "riser", x: 95, y: 78, w: 10, h: 54, rx: 4 },
+        { kind: "collar", x: 91, y: 88, w: 18, h: 7, rx: 3 },
+        { kind: "head", x: 88, y: 66, w: 23, h: 12, rx: 5 },
+        { kind: "nozzle", x: 108, y: 69, w: 8, h: 5, rx: 2 },
+      ],
     },
     elder: {
       name: "the elder",
       numeral: { x: 103, y: 96 },
       nozzle: { x: 118, y: 73 },
       dir: 1,
-      anchor: { x: 78, y: 58 },
-      body: `
-        <polygon points="84,132 96,102 110,102 122,132" class="c-skirt"/>
-        <rect x="96" y="74" width="12" height="34" rx="4" class="c-riser"/>
-        <g transform="rotate(12 102 74)">
-          <rect x="89" y="64" width="26" height="12" rx="5" class="c-head"/>
-          <rect x="112" y="67" width="8" height="5" rx="2" class="c-nozzle"/>
-        </g>`,
-      contour:
-        "M76,140 Q72,130 82,127 Q88,112 92,100 Q88,92 94,86 Q88,66 96,62 L114,64 Q126,68 122,80 Q116,86 114,96 Q120,112 128,126 Q138,130 132,140 Q102,148 76,140 Z",
+      parts: [
+        { kind: "skirt", points: "84,132 96,102 110,102 122,132" },
+        { kind: "riser", x: 96, y: 74, w: 12, h: 34, rx: 4 },
+        { kind: "head", x: 89, y: 64, w: 26, h: 12, rx: 5, rot: rotation(12, 102, 74) },
+        { kind: "nozzle", x: 112, y: 67, w: 8, h: 5, rx: 2, rot: rotation(12, 102, 74) },
+      ],
     },
     stout: {
       name: "the stout",
       numeral: { x: 100, y: 122 },
       nozzle: { x: 74, y: 94 },
       dir: -1,
-      anchor: { x: 128, y: 82 },
-      body: `
-        <rect x="86" y="100" width="28" height="32" rx="6" class="c-riser"/>
-        <rect x="82" y="106" width="36" height="8" rx="3" class="c-collar"/>
-        <rect x="80" y="88" width="40" height="14" rx="6" class="c-head"/>
-        <rect x="72" y="91" width="9" height="6" rx="2" class="c-nozzle"/>`,
-      contour:
-        "M68,140 Q62,130 74,126 Q74,112 70,100 Q66,88 78,84 L120,82 Q132,84 128,96 Q122,102 122,112 Q124,124 130,128 Q140,132 134,140 Q100,148 68,140 Z",
+      parts: [
+        { kind: "riser", x: 86, y: 100, w: 28, h: 32, rx: 6 },
+        { kind: "collar", x: 82, y: 106, w: 36, h: 8, rx: 3 },
+        { kind: "head", x: 80, y: 88, w: 40, h: 14, rx: 6 },
+        { kind: "nozzle", x: 72, y: 91, w: 9, h: 6, rx: 2 },
+      ],
     },
     classic: {
       name: "the classic",
       numeral: { x: 100, y: 112 },
       nozzle: { x: 121, y: 70 },
       dir: 1,
-      anchor: { x: 76, y: 56 },
-      body: `
-        <rect x="94" y="76" width="12" height="56" rx="4" class="c-riser"/>
-        <rect x="90" y="86" width="20" height="8" rx="3" class="c-collar"/>
-        <rect x="87" y="64" width="28" height="13" rx="5" class="c-head"/>
-        <rect x="113" y="67" width="9" height="6" rx="2" class="c-nozzle"/>`,
-      contour:
-        "M70,139 Q64,129 78,125 Q82,108 84,94 Q78,88 86,82 Q82,62 90,60 L114,60 Q126,62 124,74 Q116,80 114,90 Q112,112 118,124 Q132,128 128,139 Q98,147 70,139 Z",
+      parts: [
+        { kind: "riser", x: 94, y: 76, w: 12, h: 56, rx: 4 },
+        { kind: "collar", x: 90, y: 86, w: 20, h: 8, rx: 3 },
+        { kind: "head", x: 87, y: 64, w: 28, h: 13, rx: 5 },
+        { kind: "nozzle", x: 113, y: 67, w: 9, h: 6, rx: 2 },
+      ],
     },
     scout: {
       name: "the scout",
       numeral: { x: 100, y: 112 },
       nozzle: { x: 112, y: 66 },
       dir: 1,
-      anchor: { x: 76, y: 56 },
-      body: `
-        <rect x="95" y="80" width="11" height="52" rx="4" class="c-riser"/>
-        <rect x="91" y="90" width="19" height="7" rx="3" class="c-collar"/>
-        <g transform="rotate(-16 100 80)">
-          <rect x="88" y="70" width="26" height="12" rx="5" class="c-head"/>
-          <rect x="111" y="72" width="8" height="5" rx="2" class="c-nozzle"/>
-        </g>`,
-      contour:
-        "M72,139 Q66,130 78,126 Q82,110 86,96 Q80,90 88,84 Q84,66 94,60 L112,56 Q124,58 120,70 Q114,76 112,88 Q110,112 116,124 Q130,128 126,139 Q98,147 72,139 Z",
+      parts: [
+        { kind: "riser", x: 95, y: 80, w: 11, h: 52, rx: 4 },
+        { kind: "collar", x: 91, y: 90, w: 19, h: 7, rx: 3 },
+        { kind: "head", x: 88, y: 70, w: 26, h: 12, rx: 5, rot: rotation(-16, 100, 80) },
+        { kind: "nozzle", x: 111, y: 72, w: 8, h: 5, rx: 2, rot: rotation(-16, 100, 80) },
+      ],
     },
     column: {
       name: "the column",
       numeral: { x: 100, y: 120 },
       nozzle: { x: 117, y: 52 },
       dir: 1,
-      anchor: { x: 76, y: 42 },
-      body: `
-        <rect x="94" y="58" width="12" height="74" rx="4" class="c-riser"/>
-        <rect x="90" y="72" width="20" height="7" rx="3" class="c-collar"/>
-        <rect x="90" y="94" width="20" height="7" rx="3" class="c-collar"/>
-        <rect x="88" y="46" width="24" height="12" rx="5" class="c-head"/>
-        <rect x="110" y="49" width="8" height="5" rx="2" class="c-nozzle"/>`,
-      contour:
-        "M72,139 Q66,130 78,126 Q82,104 84,78 Q78,70 86,64 Q82,46 90,42 L112,42 Q124,44 122,56 Q116,62 114,72 Q112,108 118,124 Q132,128 128,139 Q98,147 72,139 Z",
+      parts: [
+        { kind: "riser", x: 94, y: 58, w: 12, h: 74, rx: 4 },
+        { kind: "collar", x: 90, y: 72, w: 20, h: 7, rx: 3 },
+        { kind: "collar", x: 90, y: 94, w: 20, h: 7, rx: 3 },
+        { kind: "head", x: 88, y: 46, w: 24, h: 12, rx: 5 },
+        { kind: "nozzle", x: 110, y: 49, w: 8, h: 5, rx: 2 },
+      ],
     },
   };
+
+  const PART_CLASS = {
+    riser: "c-riser",
+    collar: "c-collar",
+    head: "c-head",
+    nozzle: "c-nozzle",
+    skirt: "c-skirt",
+  };
+
+  function sameRotation(a, b) {
+    return a && b && a.a === b.a && a.cx === b.cx && a.cy === b.cy;
+  }
+
+  function shapeMarkup(part, withClasses, extra = "") {
+    const cls = withClasses ? ` class="${PART_CLASS[part.kind]}"` : "";
+    if (part.points) return `<polygon points="${part.points}"${cls}${extra}/>`;
+    return `<rect x="${part.x}" y="${part.y}" width="${part.w}" height="${part.h}" rx="${part.rx}"${cls}${extra}/>`;
+  }
+
+  function partsMarkup(character, withClasses, extra = "") {
+    const out = [];
+    let index = 0;
+    while (index < character.parts.length) {
+      const part = character.parts[index];
+      if (!part.rot) {
+        out.push(shapeMarkup(part, withClasses, extra));
+        index += 1;
+        continue;
+      }
+      const group = [];
+      const shared = part.rot;
+      while (index < character.parts.length && sameRotation(character.parts[index].rot, shared)) {
+        group.push(shapeMarkup(character.parts[index], withClasses, extra));
+        index += 1;
+      }
+      out.push(`<g transform="rotate(${shared.a} ${shared.cx} ${shared.cy})">${group.join("")}</g>`);
+    }
+    const inner = out.join("\n        ");
+    if (!character.pose) return inner;
+    const pose = character.pose;
+    const cls = withClasses ? ` class="char-pose"` : "";
+    return `<g${cls} transform="rotate(${pose.a} ${pose.cx} ${pose.cy})">${inner}</g>`;
+  }
+
+  /* Exact silhouette bounding box in SVG user units, honouring both the
+   * per-part and whole-pose rotations. Rounded corners stay inside the
+   * rectangle corners, so corner math is exact for the box. */
+  function rotatePoint([x, y], { a, cx, cy }) {
+    const rad = (a * Math.PI) / 180;
+    const dx = x - cx;
+    const dy = y - cy;
+    return [
+      cx + dx * Math.cos(rad) - dy * Math.sin(rad),
+      cy + dx * Math.sin(rad) + dy * Math.cos(rad),
+    ];
+  }
+
+  function silhouetteBBox(character) {
+    if (character._bbox) return character._bbox;
+    const points = [];
+    for (const part of character.parts) {
+      const corners = part.points
+        ? part.points.trim().split(/\s+/).map((pair) => pair.split(",").map(Number))
+        : [
+          [part.x, part.y],
+          [part.x + part.w, part.y],
+          [part.x, part.y + part.h],
+          [part.x + part.w, part.y + part.h],
+        ];
+      for (let corner of corners) {
+        if (part.rot) corner = rotatePoint(corner, part.rot);
+        if (character.pose) corner = rotatePoint(corner, character.pose);
+        points.push(corner);
+      }
+    }
+    const xs = points.map(([x]) => x);
+    const ys = points.map(([, y]) => y);
+    character._bbox = {
+      minX: Math.min(...xs),
+      minY: Math.min(...ys),
+      maxX: Math.max(...xs),
+      maxY: Math.max(...ys),
+    };
+    return character._bbox;
+  }
+
+  /* Exact silhouette support point in a unit direction: the boundary point
+   * of the rendered silhouette farthest along (dirX, dirY), honouring both
+   * rotations and the rounded rect corners (a rounded corner's support is
+   * its corner-circle centre pushed radius further along the direction).
+   * Unlike a bounding-box corner this is always a real silhouette point, so
+   * offsetting from it by a CSS-pixel distance is scale-invariant: every
+   * silhouette point lies on the far side of the supporting line, which
+   * makes the offset point's nearest-silhouette distance exactly the offset.
+   * Spray, shadow, grass and numerals are never part of the silhouette. */
+  function silhouetteSupportPoint(character, dirX, dirY) {
+    const key = `_support_${dirX.toFixed(4)}_${dirY.toFixed(4)}`;
+    if (character[key]) return character[key];
+    let best = null;
+    let bestDot = -Infinity;
+    for (const part of character.parts) {
+      const candidates = [];
+      if (part.points) {
+        for (const pair of part.points.trim().split(/\s+/)) {
+          const [x, y] = pair.split(",").map(Number);
+          candidates.push({ x, y, r: 0 });
+        }
+      } else {
+        const r = Math.min(part.rx || 0, part.w / 2, part.h / 2);
+        for (const cx of [part.x + r, part.x + part.w - r]) {
+          for (const cy of [part.y + r, part.y + part.h - r]) {
+            candidates.push({ x: cx, y: cy, r });
+          }
+        }
+      }
+      for (const candidate of candidates) {
+        let point = [candidate.x, candidate.y];
+        if (part.rot) point = rotatePoint(point, part.rot);
+        if (character.pose) point = rotatePoint(point, character.pose);
+        const dot = point[0] * dirX + point[1] * dirY + candidate.r;
+        if (dot > bestDot) {
+          bestDot = dot;
+          best = { x: point[0] + dirX * candidate.r, y: point[1] + dirY * candidate.r };
+        }
+      }
+    }
+    character[key] = best;
+    return best;
+  }
 
   /* Zone-to-character maps come from the approved Paper boards; desktop and
    * mobile assign numerals independently by visual row order. */
   const LAYOUTS = {
     desktop: {
       media: "(min-width: 900px)",
-      frame: { w: 1140, h: 524 },
+      // 560 = the 524-unit yard plus a 36-unit band inside the frame's
+      // bottom edge, so every anchored Stop/Remove dock (bottom row lands
+      // at ≈528) stays fully inside the lawn on desktop.
+      frame: { w: 1140, h: 560 },
       zones: [
         { z: 1, kind: "sprout", x: 60, y: 10, w: 150, h: 112 },
         { z: 2, kind: "elder", x: 920, y: 0, w: 150, h: 112 },
@@ -146,14 +289,38 @@
     const n = c.nozzle;
     const d = c.dir;
     const landX = n.x + 54 * d;
+    const maskId = `sel-mask-${zone}`;
+    /* The selection outline is the silhouette itself, dilated by a uniform
+     * rendered distance: the paint layers stroke the exact silhouette copy
+     * outward, and the mask cuts everything closer than the gap, leaving a
+     * ring that hugs only the physical sprinkler — never spray or shadow.
+     * The copies carry vector-effect="non-scaling-stroke", so the stroke
+     * widths below are CSS-pixel values the engine applies in screen space:
+     * the dilation is exact at every zone scale and DPR, rasterized at
+     * native screen resolution in both engines, with no per-resize stroke
+     * arithmetic. */
+    const outlineCopy = partsMarkup(c, false, ' vector-effect="non-scaling-stroke"');
+    /* The mask cutter is painted twice: compounding the antialiased edge
+     * alpha steepens the cut, so WebKit's softer mask rasterisation on
+     * rotated part groups no longer bleeds keyline paint into the gap —
+     * both engines hold the 4 px cut to within half a pixel. */
+    const maskCutter = `<g class="outline-mask" fill="#000" stroke="#000" stroke-width="${(2 * OUTLINE_GAP_PX).toFixed(1)}" stroke-linejoin="round" stroke-linecap="round">${outlineCopy}</g>`;
     return `
       <svg viewBox="0 0 200 150" aria-hidden="true" focusable="false" class="char">
+        <defs>
+          <mask id="${maskId}" maskUnits="userSpaceOnUse" x="-40" y="-40" width="280" height="230">
+            <rect x="-40" y="-40" width="280" height="230" fill="#fff"/>
+            ${maskCutter}${maskCutter}
+          </mask>
+        </defs>
+        <rect class="hit-proxy" x="0" y="0" width="0" height="0"/>
         <ellipse cx="100" cy="135" rx="27" ry="5" class="c-shadow"/>
         <path class="c-grass" d="M66,132 q-3,-8 -7,-10 M138,132 q4,-9 8,-11" />
-        <path class="char-contour contour-halo" d="${c.contour}"/>
-        <path class="char-contour contour-keyline" d="${c.contour}"/>
-        <path class="char-contour contour-focus" d="${c.contour}"/>
-        ${c.body}
+        <g class="selection-outline" data-selection-outline mask="url(#${maskId})">
+          <g class="outline-halo" stroke-width="${(2 * (OUTLINE_GAP_PX + OUTLINE_RING_PX + OUTLINE_HALO_PX)).toFixed(1)}" stroke-linejoin="round" stroke-linecap="round">${outlineCopy}</g>
+          <g class="outline-keyline" stroke-width="${(2 * (OUTLINE_GAP_PX + OUTLINE_RING_PX)).toFixed(1)}" stroke-linejoin="round" stroke-linecap="round">${outlineCopy}</g>
+        </g>
+        ${partsMarkup(c, true)}
         <text x="${c.numeral.x}" y="${c.numeral.y}" class="sprinkler-number">${zone}</text>
         <g class="char-spray">
           <path class="spray-arc a1" d="M${n.x},${n.y} q ${28 * d},-34 ${52 * d},-8"/>
@@ -165,8 +332,8 @@
         </g>
         <circle class="char-queued-dot" cx="${n.x}" cy="${n.y}" r="2.8"/>
         <circle class="char-starting-dot" cx="${n.x}" cy="${n.y}" r="2.4"/>
-        <g class="char-anchor" transform="translate(${c.anchor.x} ${c.anchor.y})">
-          <circle r="7" class="anchor-disc"/>
+        <g class="char-anchor">
+          <circle r="${BADGE_RADIUS_PX}" class="anchor-disc"/>
           <path d="M-3,0 L-1,2.6 L3.4,-2.4" class="anchor-check"/>
         </g>
       </svg>`;
@@ -222,7 +389,12 @@
 
   function headLabel(z, kindName, s) {
     const base = `Zone ${z}, ${kindName} sprinkler`;
-    if (!s || s.status === "idle") return `${base} — idle`;
+    if (!s || s.status === "idle") {
+      // A stale controller qualifies even the idle claim: it is last-known
+      // truth, presented with the same standard as busy neighbours.
+      const stale = s?.stale ? ". Controller state is stale; controls unavailable." : "";
+      return `${base} — idle${stale}`;
+    }
     if (s.status === "offline") return `${base} — controller offline, controls unavailable`;
     if (s.status === "starting") return `${base} — starting, waiting for the controller`;
     if (s.status === "stopping") return `${base} — stopping, water draining`;
@@ -231,13 +403,19 @@
         ? ` Stopping ends watering for ${listZones(s.task.zones)} together.`
         : "";
       const stale = s.stale ? " Controller state is stale; controls unavailable." : "";
-      return `${base} — watering, about ${s.remaining} of ${s.task.runTime} minutes left.${stale} Opens the Stop watering task valve.${shared}`;
+      const control = s.stale ? "" : " Its Stop valve sits just below.";
+      return `${base} — watering, about ${s.remaining} of ${s.task.runTime} minutes left.${stale}${control}${shared}`;
     }
     if (s.status === "queued") {
       const shared = s.task.zones.length > 1
         ? ` Removing cancels ${listZones(s.task.zones)} together.`
         : "";
-      return `${base} — queued to water for ${s.task.runTime} minutes. Opens the Remove queued task control.${shared}`;
+      // Mirror the active branch: a stale controller withdraws the Remove
+      // control from the dock, so the label must say so instead of
+      // promising a control that is not in the DOM.
+      const stale = s.stale ? " Controller state is stale; controls unavailable." : "";
+      const control = s.stale ? "" : " Its Remove control sits just below.";
+      return `${base} — queued to water for ${s.task.runTime} minutes.${stale}${control}${shared}`;
     }
     return base;
   }
@@ -271,6 +449,12 @@
       state.selected = null;
       container.innerHTML = "";
       container.classList.add("field-lawn");
+      // Release every target from the previous layout before rebuilding:
+      // the observer holds strong references, so discarded docks would
+      // otherwise be retained across every breakpoint crossing. The
+      // container and the new docks are re-observed below.
+      resizeObserver?.disconnect();
+      resizeObserver?.observe(container);
 
       const tufts = document.createElement("div");
       tufts.className = "field-tufts";
@@ -298,7 +482,6 @@
         btn.className = "field-zone";
         btn.setAttribute("data-testid", "field-zone");
         btn.dataset.zone = String(entry.z);
-        btn.setAttribute("aria-expanded", "false");
         btn.setAttribute("aria-label", headLabel(entry.z, CHARACTERS[entry.kind].name, null));
         btn.innerHTML = characterSVG(entry, entry.z);
         btn.addEventListener("click", () => toggleSelect(entry.z));
@@ -308,38 +491,240 @@
         waterline.setAttribute("aria-hidden", "true");
         waterline.innerHTML = `<div class="waterline-fill"></div>`;
 
-        wrap.append(btn, waterline);
+        /* Every running/queued zone owns this dock: its Stop/Remove control,
+         * anchored just below the zone's own silhouette centreline. */
+        const dock = document.createElement("div");
+        dock.className = "zone-dock";
+        dock.dataset.zoneDock = String(entry.z);
+        dock.hidden = true;
+
+        wrap.append(btn, waterline, dock);
         container.appendChild(wrap);
+        // The keep-inside-the-lawn clamp must re-run whenever the dock's own
+        // content size changes (e.g. text scaling widens the Remove pill),
+        // not only when the container resizes.
+        resizeObserver?.observe(dock);
       }
       applyState();
+      syncGeometry();
+    }
+
+    /* Position and scale everything that must track the rendered silhouette:
+     * outline stroke widths (so the gap is uniform in CSS pixels at every
+     * zone size), the waterline, and each zone's anchored control dock.
+     * preserveAspectRatio letterboxing is accounted for explicitly. */
+    function syncGeometry() {
+      if (!state.layout) return;
+      // First pass: rendered geometry for every zone including each
+      // silhouette's viewport rect — dock placement must respect every
+      // neighbour's silhouette, not only the lawn edges.
+      const zoneMetrics = [];
+      for (const entry of state.layout.zones) {
+        const wrap = wrapFor(entry.z);
+        if (!wrap) continue;
+        const rect = wrap.getBoundingClientRect();
+        if (!rect.width || !rect.height) continue;
+        const scale = Math.min(rect.width / 200, rect.height / 150);
+        const offsetX = (rect.width - 200 * scale) / 2;
+        const offsetY = (rect.height - 150 * scale) / 2;
+        const bbox = silhouetteBBox(CHARACTERS[entry.kind]);
+        const silhouette = {
+          left: rect.left + offsetX + bbox.minX * scale,
+          right: rect.left + offsetX + bbox.maxX * scale,
+          top: rect.top + offsetY + bbox.minY * scale,
+          bottom: rect.top + offsetY + bbox.maxY * scale,
+        };
+        // The zone's INTENDED activation region: the silhouette inflated to
+        // a generous >=44px tap target, unioned with a 44px box at the
+        // wrap centre (the conventional tap point) so centre taps always
+        // land inside the region for every variant.
+        const padX = Math.max(10, (44 - (silhouette.right - silhouette.left)) / 2);
+        const padY = Math.max(6, (44 - (silhouette.bottom - silhouette.top)) / 2);
+        const centreX = rect.left + rect.width / 2;
+        const centreY = rect.top + rect.height / 2;
+        zoneMetrics.push({
+          entry,
+          wrap,
+          rect,
+          scale,
+          offsetX,
+          offsetY,
+          bbox,
+          silhouette,
+          activation: {
+            left: Math.min(silhouette.left - padX, centreX - 22),
+            right: Math.max(silhouette.right + padX, centreX + 22),
+            top: Math.min(silhouette.top - padY, centreY - 22),
+            bottom: Math.max(silhouette.bottom + padY, centreY + 22),
+          },
+        });
+      }
+      const DOCK_CLEARANCE = 2; // CSS px between a dock and any neighbour ACTIVATION region
+      const fieldRect = container.getBoundingClientRect();
+      const bandPx = Number.parseFloat(getComputedStyle(container).marginBottom) || 0;
+      const dockJobs = [];
+      for (const metric of zoneMetrics) {
+        const { entry, wrap, rect: wrapRect, scale, offsetX, offsetY, bbox } = metric;
+        // Outline stroke widths are screen-space constants (non-scaling
+        // strokes set in the markup); only the badge and dock need scale.
+        const svg = wrap.querySelector("svg.char");
+        /* Badge: anchor to the real silhouette boundary, offset a constant
+         * CSS-pixel distance up-left, and undo the zone scale so the disc
+         * renders at one constant size everywhere. */
+        const support = silhouetteSupportPoint(CHARACTERS[entry.kind], BADGE_DIR.x, BADGE_DIR.y);
+        const anchorX = support.x + (BADGE_DIST_PX / scale) * BADGE_DIR.x;
+        const anchorY = support.y + (BADGE_DIST_PX / scale) * BADGE_DIR.y;
+        const proxy = svg.querySelector(".hit-proxy");
+        if (proxy) {
+          const activation = metric.activation;
+          proxy.setAttribute("x", ((activation.left - wrapRect.left - offsetX) / scale).toFixed(2));
+          proxy.setAttribute("y", ((activation.top - wrapRect.top - offsetY) / scale).toFixed(2));
+          proxy.setAttribute("width", ((activation.right - activation.left) / scale).toFixed(2));
+          proxy.setAttribute("height", ((activation.bottom - activation.top) / scale).toFixed(2));
+        }
+        svg.querySelector(".char-anchor").setAttribute(
+          "transform",
+          `translate(${anchorX.toFixed(3)} ${anchorY.toFixed(3)}) scale(${(1 / scale).toFixed(4)})`
+        );
+        const contentBottom = offsetY + 150 * scale;
+        const waterline = wrap.querySelector(".waterline");
+        waterline.style.left = `${(offsetX + 100 * scale).toFixed(1)}px`;
+        waterline.style.top = `${(contentBottom + 4).toFixed(1)}px`;
+        const dock = wrap.querySelector(".zone-dock");
+        dock.style.left = `${(offsetX + ((bbox.minX + bbox.maxX) / 2) * scale).toFixed(1)}px`;
+        dock.style.top = `${(contentBottom + 8).toFixed(1)}px`;
+        if (dock.childElementCount) dockJobs.push({ entry, dock });
+      }
+      /* Multi-pass dock resolution: every dock must clear the lawn edges,
+       * every OTHER zone's activation region, and every OTHER dock —
+       * preferring a modest horizontal shift or a lower row directly under
+       * its own zone over a large sideways jump; a full Remove pill that
+       * fits nowhere compacts to its 44px icon form. Docks constrain each
+       * other, so a few passes let the placements settle; each run starts
+       * from the ideal positions, keeping the result deterministic. */
+      const solveDock = (job) => {
+        const { entry, dock } = job;
+        const bestPosition = (idealLeft, width, top, bottom) => {
+          const minLeft = fieldRect.left + 4;
+          const maxLeft = fieldRect.right - 4 - width;
+          if (maxLeft < minLeft) return null;
+          const blockers = [];
+          for (const other of zoneMetrics) {
+            if (other.entry.z === entry.z) continue;
+            if (other.activation.bottom > top + 0.5 && other.activation.top < bottom - 0.5) {
+              blockers.push({
+                from: other.activation.left - DOCK_CLEARANCE - width,
+                to: other.activation.right + DOCK_CLEARANCE,
+              });
+            }
+          }
+          for (const other of dockJobs) {
+            if (other === job) continue;
+            const rect = other.dock.getBoundingClientRect();
+            if (rect.bottom + DOCK_CLEARANCE > top + 0.5 && rect.top - DOCK_CLEARANCE < bottom - 0.5) {
+              blockers.push({ from: rect.left - DOCK_CLEARANCE - width, to: rect.right + DOCK_CLEARANCE });
+            }
+          }
+          const fits = (left) => left >= minLeft && left <= maxLeft &&
+            blockers.every((blocker) => left <= blocker.from || left >= blocker.to);
+          const candidates = [Math.min(Math.max(idealLeft, minLeft), maxLeft)];
+          for (const blocker of blockers) candidates.push(blocker.from, blocker.to);
+          let best = null;
+          for (const candidate of candidates) {
+            if (!fits(candidate)) continue;
+            if (best === null || Math.abs(candidate - idealLeft) < Math.abs(best - idealLeft)) best = candidate;
+          }
+          return best;
+        };
+        // Compact hysteresis: while compact, first check — without touching
+        // any class, so the ResizeObserver never oscillates — whether the
+        // stored full width would fit again, and only then expand.
+        if (dock.dataset.dockCompact) {
+          const fullWidth = Number.parseFloat(dock.dataset.dockCompact);
+          const probe = dock.getBoundingClientRect();
+          if (bestPosition(probe.left, fullWidth, probe.top, probe.bottom) !== null) {
+            dock.classList.remove("dock-compact");
+            delete dock.dataset.dockCompact;
+          }
+        }
+        const applyBest = (maxShift) => {
+          const dockRect = dock.getBoundingClientRect();
+          const width = dockRect.width;
+          const height = dockRect.height;
+          const baseTop = dockRect.top;
+          const maxTop = fieldRect.bottom + bandPx - 2 - height;
+          const tops = [baseTop];
+          for (const other of zoneMetrics) {
+            if (other.entry.z === entry.z) continue;
+            const candidate = other.activation.bottom + DOCK_CLEARANCE;
+            if (candidate > baseTop && candidate <= maxTop) tops.push(candidate);
+          }
+          for (const other of dockJobs) {
+            if (other === job) continue;
+            const candidate = other.dock.getBoundingClientRect().bottom + DOCK_CLEARANCE;
+            if (candidate > baseTop && candidate <= maxTop) tops.push(candidate);
+          }
+          tops.sort((a, b) => a - b);
+          for (const top of tops) {
+            const best = bestPosition(dockRect.left, width, top, top + height);
+            if (best === null || Math.abs(best - dockRect.left) > maxShift) continue;
+            if (Math.abs(best - dockRect.left) > 0.1) {
+              dock.style.left = `${(Number.parseFloat(dock.style.left) + (best - dockRect.left)).toFixed(1)}px`;
+            }
+            if (Math.abs(top - baseTop) > 0.1) {
+              dock.style.top = `${(Number.parseFloat(dock.style.top) + (top - baseTop)).toFixed(1)}px`;
+            }
+            return true;
+          }
+          return false;
+        };
+        // Association first: a modest shift beats compaction, compaction
+        // beats a far sideways jump, and the jump beats leaving the lawn.
+        if (!applyBest(40)) {
+          if (!dock.classList.contains("dock-compact") && dock.querySelector(".remove-text")) {
+            // No nearby clear span fits the full Remove pill: collapse it to
+            // its 44px coupler-icon form — the aria-label keeps the name.
+            dock.dataset.dockCompact = dock.getBoundingClientRect().width.toFixed(1);
+            dock.classList.add("dock-compact");
+          }
+          if (!applyBest(40) && !applyBest(Number.POSITIVE_INFINITY)) {
+            // Last resort: at least never leave the lawn.
+            const dockRect = dock.getBoundingClientRect();
+            let shift = 0;
+            if (dockRect.right > fieldRect.right - 4) shift = fieldRect.right - 4 - dockRect.right;
+            else if (dockRect.left < fieldRect.left + 4) shift = fieldRect.left + 4 - dockRect.left;
+            if (shift) dock.style.left = `${(Number.parseFloat(dock.style.left) + shift).toFixed(1)}px`;
+          }
+        }
+      };
+      for (let pass = 0; pass < 3; pass += 1) {
+        let anyMoved = false;
+        for (const job of dockJobs) {
+          const before = job.dock.getBoundingClientRect();
+          solveDock(job);
+          const after = job.dock.getBoundingClientRect();
+          if (Math.abs(after.left - before.left) > 0.5 || Math.abs(after.top - before.top) > 0.5) anyMoved = true;
+        }
+        if (!anyMoved) break;
+      }
+    }
+
+    let geometryFrame = 0;
+    function scheduleGeometry() {
+      cancelAnimationFrame(geometryFrame);
+      geometryFrame = requestAnimationFrame(syncGeometry);
     }
 
     function wrapFor(z) {
       return container.querySelector(`[data-zone-wrapper="${z}"]`);
     }
 
-    function entryFor(z) {
-      return state.layout.zones.find((e) => e.z === z);
-    }
-
-    function closePopover({ refocus = false } = {}) {
-      const pop = container.querySelector("[data-testid=zone-action-popover]");
-      if (!pop) return;
-      const z = state.selected;
-      pop.remove();
-      if (z !== null) {
-        const btn = wrapFor(z)?.querySelector(".field-zone");
-        btn?.setAttribute("aria-expanded", "false");
-        if (refocus) btn?.focus();
-      }
-    }
-
-    function clearSelection(opts = {}) {
-      closePopover(opts);
-      if (state.selected !== null) {
-        wrapFor(state.selected)?.classList.remove("is-selected");
-        state.selected = null;
-      }
+    function clearSelection({ refocus = false } = {}) {
+      if (state.selected === null) return;
+      const wrap = wrapFor(state.selected);
+      wrap?.classList.remove("is-selected");
+      if (refocus) wrap?.querySelector(".field-zone")?.focus();
+      state.selected = null;
     }
 
     /* Zones the controller reports as carrying a task (active/queued) or that
@@ -357,7 +742,7 @@
       if (state.offline || state.stale) return;
       if (contextualSelection && idleEligible(z)) {
         // Idle zones feed the contextual Quick Task selection; ownership of
-        // status/Stop/Remove activation stays with the popover path below.
+        // status truth and the anchored Stop/Remove docks stays below.
         if (state.idleLocked) return;
         if (state.idleSelected.has(z)) state.idleSelected.delete(z);
         else state.idleSelected.add(z);
@@ -371,9 +756,7 @@
       }
       clearSelection();
       state.selected = z;
-      const wrap = wrapFor(z);
-      wrap.classList.add("is-selected");
-      openPopover(z);
+      wrapFor(z).classList.add("is-selected");
     }
 
     function setIdleSelection(zones, reason = "restore") {
@@ -397,63 +780,74 @@
       state.idleLocked = Boolean(locked);
     }
 
-    function openPopover(z) {
-      const s = state.zones.get(z);
-      if (state.stale || !s || (s.status !== "active" && s.status !== "queued")) {
-        return; // idle/starting selection shows the contour only — nothing fires
-      }
-      const wrap = wrapFor(z);
-      const entry = entryFor(z);
-      const pop = document.createElement("div");
-      pop.className = "zone-popover";
-      pop.setAttribute("data-testid", "zone-action-popover");
-      pop.setAttribute("role", "group");
-      pop.setAttribute("aria-label", `Zone ${z} actions`);
-      const onLeftEdge = entry.x / state.layout.frame.w < 0.16;
-      pop.classList.add(onLeftEdge ? "popover-right" : "popover-left");
+    function makeStopButton(z, s) {
+      const stopBtn = document.createElement("button");
+      stopBtn.type = "button";
+      stopBtn.className = "valve-btn";
+      stopBtn.setAttribute("data-testid", "zone-stop");
+      stopBtn.setAttribute(
+        "aria-label",
+        s.task.zones.length > 1
+          ? `Stop watering — ${listZones(s.task.zones)}, one task, stops all of them`
+          : `Stop watering — zone ${z}`
+      );
+      stopBtn.innerHTML = valveSVG();
+      stopBtn.addEventListener("click", () => {
+        const current = state.zones.get(z);
+        if (stopBtn.disabled || !current?.task) return;
+        stopBtn.disabled = true;
+        markStopping(current.task.id, "stop");
+        handlers.onStop?.(current.task);
+      });
+      return stopBtn;
+    }
 
-      if (s.status === "active") {
-        const stopBtn = document.createElement("button");
-        stopBtn.type = "button";
-        stopBtn.className = "valve-btn";
-        stopBtn.setAttribute(
-          "aria-label",
-          s.task.zones.length > 1
-            ? `Stop watering — ${listZones(s.task.zones)}, one task, stops all of them`
-            : `Stop watering — zone ${z}`
-        );
-        stopBtn.innerHTML = valveSVG();
-        if (state.pendingTasks.has(String(s.task.id))) stopBtn.disabled = true;
-        stopBtn.addEventListener("click", () => {
-          if (stopBtn.disabled) return;
-          stopBtn.disabled = true;
-          markStopping(s.task.id, "stop");
-          handlers.onStop?.(s.task);
-        });
-        pop.appendChild(stopBtn);
-      } else if (s.status === "queued") {
-        const removeBtn = document.createElement("button");
-        removeBtn.type = "button";
-        removeBtn.className = "remove-btn";
-        removeBtn.setAttribute(
-          "aria-label",
-          s.task.zones.length > 1
-            ? `Remove queued task — ${listZones(s.task.zones)}, removed together`
-            : `Remove queued task — zone ${z}`
-        );
-        removeBtn.innerHTML = `${removeCouplerSVG()}<span class="remove-text">Remove</span>`;
-        if (state.pendingTasks.has(String(s.task.id))) removeBtn.disabled = true;
-        removeBtn.addEventListener("click", () => {
-          if (removeBtn.disabled) return;
-          removeBtn.disabled = true;
-          markStopping(s.task.id, "remove");
-          handlers.onRemove?.(s.task);
-        });
-        pop.appendChild(removeBtn);
-      }
+    function makeRemoveButton(z, s) {
+      const removeBtn = document.createElement("button");
+      removeBtn.type = "button";
+      removeBtn.className = "remove-btn";
+      removeBtn.setAttribute("data-testid", "zone-remove");
+      removeBtn.setAttribute(
+        "aria-label",
+        s.task.zones.length > 1
+          ? `Remove queued task — ${listZones(s.task.zones)}, removed together`
+          : `Remove queued task — zone ${z}`
+      );
+      removeBtn.innerHTML = `${removeCouplerSVG()}<span class="remove-text">Remove</span>`;
+      removeBtn.addEventListener("click", () => {
+        const current = state.zones.get(z);
+        if (removeBtn.disabled || !current?.task) return;
+        removeBtn.disabled = true;
+        markStopping(current.task.id, "remove");
+        handlers.onRemove?.(current.task);
+      });
+      return removeBtn;
+    }
 
-      wrap.appendChild(pop);
-      wrap.querySelector(".field-zone").setAttribute("aria-expanded", "true");
+    /* Keep each zone's dock truthful without rebuilding it on every poll:
+     * content is replaced only when the underlying task association changes,
+     * so an operator's focus survives the 2s refresh cycle. */
+    function syncDock(wrap, entry, s) {
+      const dock = wrap.querySelector(".zone-dock");
+      const usable = !state.offline && !state.stale;
+      const status = usable && (s.status === "active" || s.status === "queued") ? s.status : "none";
+      const signature = status === "none"
+        ? "none"
+        : `${status}|${s.task.id}|${[...s.task.zones].sort((a, b) => a - b).join(",")}`;
+      if (dock.dataset.signature !== signature) {
+        const hadFocus = dock.contains(document.activeElement);
+        dock.dataset.signature = signature;
+        dock.replaceChildren();
+        if (status === "active") dock.appendChild(makeStopButton(entry.z, s));
+        else if (status === "queued") dock.appendChild(makeRemoveButton(entry.z, s));
+        if (hadFocus) wrap.querySelector(".field-zone")?.focus();
+        scheduleGeometry();
+      }
+      const control = dock.querySelector("button");
+      const pending = Boolean(s.task && state.pendingTasks.has(String(s.task.id)));
+      if (control) control.disabled = pending;
+      dock.classList.toggle("is-stopping", pending);
+      dock.hidden = !dock.childElementCount;
     }
 
     function markStopping(taskId, operationKind = "stop") {
@@ -489,7 +883,7 @@
         if (!wrap) continue;
         const s = state.offline
           ? { status: "offline" }
-          : state.zones.get(entry.z) || { status: "idle" };
+          : state.zones.get(entry.z) || { status: "idle", stale: state.stale };
         wrap.className = wrap.className
           .replace(/\bis-(idle|active|queued|starting|stopping|offline)\b/g, "")
           .trim();
@@ -509,6 +903,7 @@
         } else {
           btn.removeAttribute("aria-pressed");
         }
+        syncDock(wrap, entry, s);
         const waterline = wrap.querySelector(".waterline");
         if (s.status === "active" || s.status === "stopping") {
           waterline.removeAttribute("aria-hidden");
@@ -528,21 +923,9 @@
           waterline.querySelector(".waterline-fill").style.width = "0%";
         }
       }
-      if (state.selected !== null) {
-        const s = state.offline ? null : state.zones.get(state.selected);
-        const pop = container.querySelector("[data-testid=zone-action-popover]");
-        if (!s || s.status === "idle" || s.status === "starting" || state.offline || state.stale) {
-          // Poll confirmed the task is gone (or we went offline) — retire controls.
-          if (pop) closePopover();
-          if (state.offline || state.stale) clearSelection();
-        } else if (pop) {
-          const valve = pop.querySelector(".valve-btn");
-          const remove = pop.querySelector(".remove-btn");
-          const pending = Boolean(s.task && state.pendingTasks.has(String(s.task.id)));
-          if (valve) valve.disabled = pending;
-          if (remove) remove.disabled = pending;
-          pop.classList.toggle("is-stopping", pending);
-        }
+      if (state.selected !== null && (state.offline || state.stale)) {
+        // The controller vanished under a status selection — retire it.
+        clearSelection();
       }
       if (idlePruned) handlers.onIdleSelectionChange?.(idleSelectionList(), "reconcile");
     }
@@ -581,12 +964,10 @@
 
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && state.selected !== null) {
-        const withinPopover = container
-          .querySelector("[data-testid=zone-action-popover]")
-          ?.contains(document.activeElement);
-        clearSelection({ refocus: Boolean(withinPopover) });
-        // This Escape belongs to the popover; the contextual island keeps
-        // its selection until a further, unconsumed Escape.
+        const wrap = wrapFor(state.selected);
+        clearSelection({ refocus: Boolean(wrap?.contains(document.activeElement)) });
+        // This Escape belongs to the status selection; the contextual island
+        // keeps its selection until a further, unconsumed Escape.
         event.preventDefault();
       }
     });
@@ -599,6 +980,13 @@
     mqDesktop.addEventListener("change", () => {
       build();
     });
+
+    const resizeObserver = typeof ResizeObserver === "function"
+      ? new ResizeObserver(scheduleGeometry)
+      : null;
+    // build() owns the observer's target list: it disconnects and then
+    // re-observes the container and the freshly built docks on every run.
+    window.addEventListener("resize", scheduleGeometry);
 
     build();
     return {

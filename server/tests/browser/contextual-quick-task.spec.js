@@ -67,22 +67,54 @@ async function sectionGeometry(page) {
 }
 
 for (const viewport of viewports) {
-  test(`island reveal and dismiss cause exact zero layout shift at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+  test(`island reveal and dismiss never shift visible sections at ${viewport.width}x${viewport.height}`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await page.goto("/");
     await page.waitForSelector("[data-testid=field-zone-6]");
+    // Every visible section keeps its exact position and size while the
+    // island opens and closes. The document may grow only at its very end,
+    // and by EXACTLY the dashboard's own reserved open-state clearance (the
+    // padding delta the .quick-task-open class applies — 162px on desktop,
+    // 0 on mobile): nothing else may add height anywhere.
+    const stable = ({ main, ...sections }) => ({ ...sections, mainTop: main && [main[0], main[1], main[2]] });
+    const mainHeight = (geometry) => geometry.main?.[3] ?? 0;
+    const paddingOf = () => page.locator(".shell.dashboard")
+      .evaluate((node) => Number.parseFloat(getComputedStyle(node).paddingBottom));
     const hidden = await sectionGeometry(page);
+    const closedPadding = await paddingOf();
     await page.getByRole("button", { name: /Zone 1.*idle/i }).click();
     await expect(page.locator("[data-testid=quick-task-island]")).toBeVisible();
     const visible = await sectionGeometry(page);
-    expect(visible).toEqual(hidden);
+    const openPadding = await paddingOf();
+    const reserved = openPadding - closedPadding;
+    expect(stable(visible)).toEqual(stable(hidden));
+    expect(reserved, "reserved clearance is bounded").toBeLessThanOrEqual(220);
+    expect(reserved, "reserved clearance never shrinks the document").toBeGreaterThanOrEqual(0);
+    expect(Math.abs(mainHeight(visible) - mainHeight(hidden) - reserved),
+      "open island grows the document tail by exactly the reserved clearance")
+      .toBeLessThanOrEqual(1);
     await page.getByRole("button", { name: /Zone 3.*idle/i }).click();
     const multi = await sectionGeometry(page);
-    expect(multi).toEqual(hidden);
+    expect(stable(multi)).toEqual(stable(hidden));
+    expect(Math.abs(mainHeight(multi) - mainHeight(hidden) - reserved),
+      "multi selection never adds further height").toBeLessThanOrEqual(1);
+    // Sensitivity control: rogue extra clearance breaks the exact bound
+    // (the old >= check accepted any growth at all).
+    const rogueGrowth = await page.evaluate(() => {
+      const dashboard = document.querySelector(".shell.dashboard");
+      const main = document.querySelector("main");
+      const before = main.getBoundingClientRect().height;
+      dashboard.style.paddingBottom = `${Number.parseFloat(getComputedStyle(dashboard).paddingBottom) + 300}px`;
+      const after = main.getBoundingClientRect().height;
+      dashboard.style.paddingBottom = "";
+      return after - before;
+    });
+    expect(Math.abs(rogueGrowth), "the exact-growth bound detects rogue clearance").toBeGreaterThan(220);
     await page.getByRole("button", { name: /Close Quick Task/i }).click();
     await expect(page.locator("[data-testid=quick-task-island]")).toBeHidden();
     const dismissed = await sectionGeometry(page);
     expect(dismissed).toEqual(hidden);
+    expect(await paddingOf(), "dismissal releases the reserved clearance").toBeCloseTo(closedPadding, 0);
   });
 }
 
@@ -116,18 +148,19 @@ test("selection highlight hugs each sprinkler silhouette, not a rectangular card
   for (const zone of [1, 5]) {
     const wrap = page.locator(`[data-testid=field-zone-${zone}]`);
     await expect(wrap).toHaveClass(/is-selected/);
-    // The 120ms contour transition settles before styling is judged.
-    await expect.poll(() => wrap.locator(".contour-keyline").evaluate((node) => Number.parseFloat(getComputedStyle(node).opacity))).toBeGreaterThanOrEqual(0.9);
+    await expect.poll(() => wrap.locator("[data-selection-outline]").evaluate((node) => Number.parseFloat(getComputedStyle(node).opacity))).toBeGreaterThanOrEqual(0.9);
     const styling = await wrap.evaluate((node) => {
-      const keyline = node.querySelector(".contour-keyline");
-      const halo = node.querySelector(".contour-halo");
+      const outline = node.querySelector("[data-selection-outline]");
       const button = node.querySelector(".field-zone");
       const wrapStyle = getComputedStyle(node);
       const buttonStyle = getComputedStyle(button);
       return {
-        keylineOpacity: Number.parseFloat(getComputedStyle(keyline).opacity),
-        haloOpacity: Number.parseFloat(getComputedStyle(halo).opacity),
-        contourPath: keyline.getAttribute("d"),
+        outlineOpacity: Number.parseFloat(getComputedStyle(outline).opacity),
+        // The outline is built from the exact silhouette shapes, dilated by
+        // stroke — never a standalone rectangle, card or hand-drawn blob.
+        outlineShapeCount: outline.querySelectorAll(".outline-keyline rect, .outline-keyline polygon").length,
+        bodyShapeCount: node.querySelectorAll(".c-riser,.c-collar,.c-head,.c-nozzle,.c-skirt").length,
+        forbiddenContent: outline.querySelectorAll("text,.char-spray,.c-shadow").length,
         wrapBackground: wrapStyle.backgroundColor,
         wrapOutline: wrapStyle.outlineStyle,
         wrapBorder: wrapStyle.borderStyle,
@@ -136,9 +169,9 @@ test("selection highlight hugs each sprinkler silhouette, not a rectangular card
         buttonBorder: buttonStyle.borderStyle,
       };
     });
-    expect(styling.keylineOpacity, `zone ${zone} keyline traces the silhouette`).toBeGreaterThanOrEqual(0.9);
-    expect(styling.haloOpacity, `zone ${zone} halo glows behind the silhouette`).toBeGreaterThan(0);
-    expect(styling.contourPath, `zone ${zone} contour is an organic path`).toMatch(/Q/);
+    expect(styling.outlineOpacity, `zone ${zone} outline traces the silhouette`).toBeGreaterThanOrEqual(0.9);
+    expect(styling.outlineShapeCount, `zone ${zone} outline derives from the silhouette parts`).toBe(styling.bodyShapeCount);
+    expect(styling.forbiddenContent, `zone ${zone} outline excludes spray, shadow and labels`).toBe(0);
     // Nothing rectangular carries the highlight.
     expect(styling.wrapBackground).toBe("rgba(0, 0, 0, 0)");
     expect(styling.wrapOutline).toBe("none");
@@ -149,7 +182,7 @@ test("selection highlight hugs each sprinkler silhouette, not a rectangular card
   }
   const unselected = page.locator("[data-testid=field-zone-2]");
   await expect(unselected).not.toHaveClass(/is-selected/);
-  expect(await unselected.locator(".contour-keyline").evaluate((node) => Number.parseFloat(getComputedStyle(node).opacity))).toBe(0);
+  expect(await unselected.locator("[data-selection-outline]").evaluate((node) => Number.parseFloat(getComputedStyle(node).opacity))).toBe(0);
 });
 
 test("multiple idle sprinklers toggle into and out of one truthful selection", async ({ page }) => {
@@ -176,12 +209,13 @@ test("running and queued zones keep Stop/Remove semantics and never join the con
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
   await page.waitForSelector("[data-testid=field-zone-6]");
-  // With no selection, activating the running zone opens Stop — not the island.
+  // Activating the running zone traces its status — never the island; its
+  // own anchored Stop control is already present.
   await page.getByRole("button", { name: /Zone 4.*watering/i }).click();
   await expect(page.getByRole("button", { name: /^Stop watering/i })).toBeVisible();
   await expect(page.locator("[data-testid=quick-task-island]")).toBeHidden();
   await page.keyboard.press("Escape");
-  await expect(page.locator("[data-testid=zone-action-popover]")).toBeHidden();
+  await expect(page.locator("[data-testid=field-zone-4]")).not.toHaveClass(/is-selected/);
   // With an idle selection active, the running/queued zones still answer with
   // their own truthful controls and the selection is unchanged.
   await page.getByRole("button", { name: /Zone 1.*idle/i }).click();
@@ -247,7 +281,7 @@ for (const viewport of [{ width: 320, height: 844 }, { width: 390, height: 844 }
   });
 }
 
-test("desktop island hovers inside the field without covering sprinklers or their controls", async ({ page }) => {
+test("desktop island floats on the viewport clear of the field, sprinklers and their controls", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
   await page.waitForSelector("[data-testid=field-zone-6]");
@@ -257,14 +291,17 @@ test("desktop island hovers inside the field without covering sprinklers or thei
   await expect(island).toBeVisible();
   const islandBox = await rect(island);
   const field = await rect(page.locator("[data-testid=field]"));
-  expect(islandBox.x).toBeGreaterThanOrEqual(field.x);
-  expect(islandBox.right).toBeLessThanOrEqual(field.right);
-  expect(islandBox.y).toBeGreaterThanOrEqual(field.y);
-  expect(islandBox.bottom).toBeLessThanOrEqual(field.bottom);
+  // The island never covers the lawn: every sprinkler and every anchored
+  // Stop/Remove control stays fully interactive while it is open.
+  expect(islandBox.x).toBeGreaterThanOrEqual(0);
+  expect(islandBox.right).toBeLessThanOrEqual(1440);
+  expect(islandBox.y).toBeGreaterThanOrEqual(0);
+  expect(islandBox.bottom).toBeLessThanOrEqual(900);
+  expect(intersects(islandBox, field), "island clear of the whole field").toBe(false);
   for (let zone = 1; zone <= 6; zone += 1) {
     expect(intersects(islandBox, await rect(page.locator(`[data-testid=field-zone-${zone}]`))), `island clear of zone ${zone}`).toBe(false);
   }
-  // Active Stop and queued Remove popovers coexist with the island untouched.
+  // Active Stop and queued Remove controls coexist with the island untouched.
   await page.getByRole("button", { name: /Zone 4.*watering/i }).click();
   const stop = page.getByRole("button", { name: /^Stop watering/i });
   await expect(stop).toBeVisible();

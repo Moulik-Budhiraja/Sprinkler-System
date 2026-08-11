@@ -37,8 +37,20 @@ test("approved status route is a status-and-stop surface at desktop and mobile",
     await expect(page.locator("h1:visible")).toHaveCount(1);
     expect(mobile.width).toBeCloseTo(390, 0);
     expect(mobile.y).toBeCloseTo(114, 0);
-    expect(mobile.height).toBeGreaterThanOrEqual(650);
-    expect(mobile.height).toBeLessThanOrEqual(738);
+    // Height contract derived from the real fixed bands: the status lawn
+    // fills the viewport minus the fixed header above it (mobile.y), the
+    // fixed nav, and the reserved 56px per-zone dock band, capped at the
+    // 738px design maximum. An equality (±1) instead of a broad floor:
+    // any unintended shrinkage fails, while the intentional dock band —
+    // 616px at 844 — passes by construction.
+    const expectedHeight = Math.min(738, viewport.height - mobile.y - nav.height - 56);
+    expect(Math.abs(mobile.height - expectedHeight),
+      `status lawn height matches its viewport-derived contract at ${viewport.width}x${viewport.height}`)
+      .toBeLessThanOrEqual(1);
+    // Sensitivity control: the 600px height the old broad floor accepted
+    // is rejected by the contract at every mobile viewport tested here.
+    expect(Math.abs(600 - expectedHeight), "the contract rejects the previously-accepted 600px height")
+      .toBeGreaterThan(1);
     expect(mobile.bottom).toBeLessThanOrEqual(nav.y + 0.5);
     for (const control of await page.locator(".field-zone").all()) {
       const bounds = await rect(control);
@@ -66,7 +78,9 @@ test("dashboard geometry follows approved desktop and mobile hierarchy", async (
   await expect(page.locator("[data-testid=quick-task-island]")).toBeHidden();
   const fieldDesktop = await rect(page.locator("[data-testid=field]"));
   expect(fieldDesktop.width).toBeCloseTo(1140, 0);
-  expect(fieldDesktop.height).toBeCloseTo(524, 0);
+  // 560: the desktop frame now contains the 36px dock band inside its
+  // bottom edge (dock containment is asserted in design-repair-field).
+  expect(fieldDesktop.height).toBeCloseTo(560, 0);
   await expect(page.locator("fieldset.qt-zones, fieldset.qt-durations")).toHaveCount(0);
 
   for (const viewport of mobileViewports) {
@@ -101,7 +115,7 @@ test("dedicated schedules and activity render complete truthful structured datas
   await page.goto("/activity");
   await expect(page.locator("[data-history-row]")).toHaveCount(7);
   await expect(page.locator("[data-history-date]").first()).not.toBeEmpty();
-  await expect(page.locator("[data-history-row]").first()).toContainText(/Started|Stopped/);
+  await expect(page.locator("[data-history-row]").first()).toContainText(/started|stopped/i);
 });
 
 test("schedule deletion requires confirmation and removes exactly one schedule", async ({ page }) => {

@@ -1,38 +1,113 @@
 {
   "route": "/",
   "state": "explicit synthetic demo with deterministic clean browser context",
-  "requiredVisibleText": [
-    "Living Yard",
-    "Sprinkler system",
-    "Status",
-    "Schedules",
-    "History"
-  ],
   "artifacts": {
     "desktop-1440-copy.png": {
-      "viewport": [1440, 900],
-      "dimensions": [1440, 900],
-      "sha256": "472b525617243ac7397df7adfdb07dbe8ca71befd76882dfcab23504f3594392"
+      "view": "full-window",
+      "state": "default",
+      "requiredVisibleText": [
+        "Living Yard",
+        "Sprinkler system",
+        "Today",
+        "Status",
+        "Schedules",
+        "History",
+        "Morning lawn",
+        "Zones 1, 2 started"
+      ],
+      "viewport": [
+        1440,
+        900
+      ],
+      "dimensions": [
+        1440,
+        900
+      ],
+      "sha256": "550c29a51e8ea03a5b6960735e3e8bcdca2ee1843ffdc239d9426892a69bdbc4"
     },
     "desktop-1440-standalone.png": {
-      "viewport": [1440, 900],
-      "dimensions": [1440, 900],
-      "sha256": "472b525617243ac7397df7adfdb07dbe8ca71befd76882dfcab23504f3594392"
+      "view": "full-window",
+      "state": "zone-selected",
+      "requiredVisibleText": [
+        "Living Yard",
+        "Sprinkler system",
+        "Today",
+        "Schedules",
+        "History",
+        "Quick Task",
+        "Start"
+      ],
+      "viewport": [
+        1440,
+        900
+      ],
+      "dimensions": [
+        1440,
+        900
+      ],
+      "sha256": "111955c2a3c6b52fcc8dd9fe06db000aaaf15cd3f9202efe5ccd131f3c1f8d21"
     },
     "mobile-844-copy.png": {
-      "viewport": [390, 844],
-      "dimensions": [390, 1023],
-      "sha256": "b6f3d12bc0f7568636af2db69811d8216a9841bcf4852355dd039ad652aa637c"
+      "view": "full-document",
+      "state": "default",
+      "requiredVisibleText": [
+        "Sprinkler system",
+        "Today",
+        "Status",
+        "Schedules",
+        "History",
+        "Morning lawn",
+        "Zones 1, 2 started"
+      ],
+      "viewport": [
+        390,
+        844
+      ],
+      "dimensions": [
+        390,
+        1135
+      ],
+      "sha256": "9a901ed4c04a47696f1e8a9a0794c6432a61d552491049b86a41551650544ff9"
     },
     "mobile-1067-copy.png": {
-      "viewport": [390, 1067],
-      "dimensions": [390, 1067],
-      "sha256": "f2502cec4f230ba1875610ece1e76257d324417054a4bf3d26d5951e405647a5"
+      "view": "device-fold",
+      "state": "default",
+      "requiredVisibleText": [
+        "Sprinkler system",
+        "Today",
+        "Status",
+        "Schedules",
+        "Morning lawn"
+      ],
+      "viewport": [
+        390,
+        1067
+      ],
+      "dimensions": [
+        390,
+        1067
+      ],
+      "sha256": "94fc9163bc4c8872ae3e7a685389ef53b7ebaba1b2a0e135b52c491f1e74b7a4"
     },
     "mobile-390x844-standalone.png": {
-      "viewport": [390, 844],
-      "dimensions": [390, 1023],
-      "sha256": "b6f3d12bc0f7568636af2db69811d8216a9841bcf4852355dd039ad652aa637c"
+      "view": "device-fold",
+      "state": "zone-selected",
+      "requiredVisibleText": [
+        "Sprinkler system",
+        "Quick Task",
+        "Start",
+        "Schedules",
+        "Today"
+      ],
+      "viewport": [
+        390,
+        844
+      ],
+      "dimensions": [
+        390,
+        844
+      ],
+      "sha256": "4ab9b3fbbd3606a7ecbb4554a9109b27a481e4cff581c7cd186e5f83d6eaef89"
     }
   }
 }

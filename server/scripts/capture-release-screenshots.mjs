@@ -17,14 +17,30 @@ const outputDirectory = writeArtifacts
   : outputArgument?.slice("--output=".length) || await fs.mkdtemp(path.join(os.tmpdir(), "sprinkler-release-screenshots-"));
 const port = 4289;
 const origin = `http://127.0.0.1:${port}`;
+/* Five semantically distinct artifacts: every entry declares its own
+ * (view, state, dimensions) tuple and captures a genuinely different image.
+ * - full-window: the desktop viewport as rendered.
+ * - full-document: the complete mobile document with the nav made static.
+ * - device-fold: the real above-the-fold device view with the live fixed
+ *   navigation, at that device's own viewport height.
+ * - state "zone-selected": the lowest idle zone selected, so the selection
+ *   outline, check badge and contextual Quick Task island are visible. */
+/* Each artifact declares the text that is actually visible INSIDE its own
+ * captured region — verified per capture, so the manifest never claims
+ * content (e.g. the desktop-only "Living Yard" brand, or below-the-fold
+ * "History") that a device-fold image cannot contain. */
 const artifactSpecs = [
-  { name: "desktop-1440-copy.png", viewport: { width: 1440, height: 900 }, dimensions: { width: 1440, height: 900 } },
-  { name: "desktop-1440-standalone.png", viewport: { width: 1440, height: 900 }, dimensions: { width: 1440, height: 900 } },
-  { name: "mobile-844-copy.png", viewport: { width: 390, height: 844 }, dimensions: { width: 390, height: 1023 } },
-  { name: "mobile-1067-copy.png", viewport: { width: 390, height: 1067 }, dimensions: { width: 390, height: 1067 } },
-  { name: "mobile-390x844-standalone.png", viewport: { width: 390, height: 844 }, dimensions: { width: 390, height: 1023 } },
+  { name: "desktop-1440-copy.png", viewport: { width: 1440, height: 900 }, dimensions: { width: 1440, height: 900 }, view: "full-window", state: "default",
+    requiredVisibleText: ["Living Yard", "Sprinkler system", "Today", "Status", "Schedules", "History", "Morning lawn", "Zones 1, 2 started"] },
+  { name: "desktop-1440-standalone.png", viewport: { width: 1440, height: 900 }, dimensions: { width: 1440, height: 900 }, view: "full-window", state: "zone-selected",
+    requiredVisibleText: ["Living Yard", "Sprinkler system", "Today", "Schedules", "History", "Quick Task", "Start"] },
+  { name: "mobile-844-copy.png", viewport: { width: 390, height: 844 }, dimensions: { width: 390, height: 1135 }, view: "full-document", state: "default",
+    requiredVisibleText: ["Sprinkler system", "Today", "Status", "Schedules", "History", "Morning lawn", "Zones 1, 2 started"] },
+  { name: "mobile-1067-copy.png", viewport: { width: 390, height: 1067 }, dimensions: { width: 390, height: 1067 }, view: "device-fold", state: "default",
+    requiredVisibleText: ["Sprinkler system", "Today", "Status", "Schedules", "Morning lawn"] },
+  { name: "mobile-390x844-standalone.png", viewport: { width: 390, height: 844 }, dimensions: { width: 390, height: 844 }, view: "device-fold", state: "zone-selected",
+    requiredVisibleText: ["Sprinkler system", "Quick Task", "Start", "Schedules", "Today"] },
 ];
-const requiredText = ["Status", "Morning lawn", "Started", "Zones 1, 2", "Schedule"];
 const forbiddenText = ["10m", "20m", "Morning lawnEnabled", "Started · Zones 1, 2Schedule", "Living YardSprinkler system", "D01 — Dashboard"];
 
 async function waitForHealth(child) {
@@ -130,16 +146,31 @@ try {
       }
       input, textarea, [contenteditable="true"] { caret-color: transparent !important; }
       html { font-synthesis: none; }
+      ` });
+    if (spec.view === "full-document") {
+      // Only the full-document capture linearizes the page; device-fold
+      // artifacts keep the real fixed navigation.
+      await page.addStyleTag({ content: `
       @media (max-width: 899px) {
         body { display: block !important; height: auto !important; min-height: 100% !important; overflow: visible !important; }
         .shell { overflow: visible !important; }
         .mobile-nav { position: static !important; }
       }
       ` });
+    }
     await page.locator("[data-testid=field-zone-6]").waitFor();
     await page.evaluate(() => document.fonts.ready);
     await page.waitForFunction(() => document.querySelector("#mobileControllerStatus")?.textContent === "Controller online");
-    await page.waitForFunction(() => document.querySelector("#schedules")?.innerText.includes("Morning lawn") && document.querySelector("#history")?.innerText.includes("Started"));
+    await page.waitForFunction(() => document.querySelector("#schedules")?.innerText.includes("Morning lawn") && /started/i.test(document.querySelector("#history")?.innerText || ""));
+    if (spec.state === "zone-selected") {
+      // Deterministic selection: the lowest idle zone (frozen demo state).
+      await page.locator(".field-zone[aria-label*='idle']").first().click();
+      await page.locator("[data-testid=quick-task-island]").waitFor({ state: "visible" });
+      await page.waitForFunction(() => {
+        const anchor = document.querySelector(".field-zone-wrap.is-selected .char-anchor");
+        return anchor && Number.parseFloat(getComputedStyle(anchor).opacity) === 1;
+      });
+    }
     await page.evaluate(async () => {
       await document.fonts.ready;
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -164,7 +195,6 @@ try {
         });
       return {
         bodyText,
-        missing: requiredText.filter((text) => !bodyText.includes(text)),
         forbidden: forbiddenText.filter((text) => bodyText.includes(text)),
         clipping,
         textBoxes,
@@ -179,15 +209,53 @@ try {
             Math.min(main.bottom, nav.bottom) - Math.max(main.top, nav.top) > 0.5;
         })(),
       };
-    }, { requiredText, forbiddenText });
-    assert.deepEqual(semantic.missing, [], `${spec.name} required visible text`);
+    }, { forbiddenText });
     assert.deepEqual(semantic.forbidden, [], `${spec.name} stale or malformed text`);
+    // Per-artifact truth: every declared string must be visibly rendered
+    // INSIDE this artifact's clip region, and the checker itself must be
+    // able to detect absence (decoy control).
+    const missingWithinClip = (texts) => page.evaluate(({ texts, clip }) => {
+      const visible = (element) => {
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
+      };
+      const withinClip = (rect) => rect.right > clip.x + 1 && rect.left < clip.x + clip.width - 1 &&
+        rect.bottom > clip.y + 1 && rect.top < clip.y + clip.height - 1;
+      // Deepest element containing the full string (icons/spans inside
+      // links keep the parent as the match target).
+      const matches = (element, text) => {
+        if (!(element.textContent || "").includes(text)) return false;
+        for (const child of element.children) {
+          if ((child.textContent || "").includes(text)) return false;
+        }
+        return true;
+      };
+      return texts.filter((text) => ![...document.querySelectorAll("body *")]
+        .some((element) => matches(element, text) &&
+          visible(element) && withinClip(element.getBoundingClientRect())));
+    }, { texts, clip: { x: 0, y: 0, width: spec.dimensions.width, height: spec.dimensions.height } });
+    assert.deepEqual(await missingWithinClip(spec.requiredVisibleText), [],
+      `${spec.name} declared text visible within its captured region`);
+    const decoy = await missingWithinClip(["__DECOY_TEXT_NEVER_PRESENT__"]);
+    assert.equal(decoy.length, 1, `${spec.name} in-clip checker detects absent text (DECOY control)`);
     assert.deepEqual(semantic.clipping, [], `${spec.name} clipped visible text`);
     assert.deepEqual(semantic.presets, ["5m", "15m", "30m", "60m"], `${spec.name} authoritative presets`);
-    assert.equal(semantic.quickTaskIslandHidden, true, `${spec.name} contextual Quick Task island hidden before selection`);
+    assert.equal(semantic.quickTaskIslandHidden, spec.state === "default",
+      `${spec.name} contextual Quick Task island matches its declared state`);
     assert.ok(semantic.statusLinks >= 1, `${spec.name} visible Status navigation`);
-    assert.equal(semantic.navigationOverlap, false, `${spec.name} mobile navigation outside content flow`);
-    if (spec.viewport.width < 900) {
+    if (spec.view === "device-fold") {
+      const nav = await page.evaluate(() => {
+        const node = document.querySelector(".mobile-nav");
+        const rect = node.getBoundingClientRect();
+        return { position: getComputedStyle(node).position, bottom: rect.bottom };
+      });
+      assert.equal(nav.position, "fixed", `${spec.name} device-fold keeps the live fixed navigation`);
+      assert.ok(Math.abs(nav.bottom - spec.viewport.height) <= 0.5, `${spec.name} navigation pinned to the fold`);
+    } else {
+      assert.equal(semantic.navigationOverlap, false, `${spec.name} mobile navigation outside content flow`);
+    }
+    if (spec.view === "full-document") {
       const documentHeight = await page.evaluate(() => document.documentElement.scrollHeight);
       assert.equal(spec.dimensions.height, documentHeight, `${spec.name} complete mobile document height`);
     }
@@ -212,6 +280,9 @@ try {
     results.push({
       name: spec.name,
       route: "/",
+      view: spec.view,
+      state: spec.state,
+      requiredVisibleText: spec.requiredVisibleText,
       viewport: spec.viewport,
       dimensions: spec.dimensions,
       sha256: crypto.createHash("sha256").update(bytes).digest("hex"),
@@ -223,8 +294,20 @@ try {
 } finally {
   await browser?.close();
   if (child.exitCode === null) child.kill("SIGTERM");
-  await Promise.race([
-    new Promise((resolve) => child.once("exit", resolve)),
-    new Promise((_, reject) => setTimeout(() => reject(new Error(`demo server cleanup timed out: ${serverOutput}`)), 5000)),
-  ]);
+  // The losing timeout must not keep the event loop alive after a clean
+  // child exit: clear it once the race settles either way.
+  let cleanupTimer;
+  try {
+    await Promise.race([
+      new Promise((resolve) => {
+        if (child.exitCode !== null) resolve();
+        else child.once("exit", resolve);
+      }),
+      new Promise((_, reject) => {
+        cleanupTimer = setTimeout(() => reject(new Error(`demo server cleanup timed out: ${serverOutput}`)), 5000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(cleanupTimer);
+  }
 }

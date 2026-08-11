@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { promisify } from "node:util";
@@ -15,9 +16,9 @@ const manifestUrl = new URL("release-screenshot-manifest.json", artifactDirector
 const expectedArtifacts = {
   "desktop-1440-copy.png": [1440, 900],
   "desktop-1440-standalone.png": [1440, 900],
-  "mobile-844-copy.png": [390, 1023],
+  "mobile-844-copy.png": [390, 1135],
   "mobile-1067-copy.png": [390, 1067],
-  "mobile-390x844-standalone.png": [390, 1023],
+  "mobile-390x844-standalone.png": [390, 844],
 };
 
 function parsePng(buffer) {
@@ -92,13 +93,35 @@ function parsePng(buffer) {
   return { width, height, colors: colors.size, luminanceRange: maximumLuminance - minimumLuminance };
 }
 
+test("every release artifact is semantically and byte distinct", async () => {
+  // Five manifest entries must carry five different images: each artifact
+  // declares its own (view, state, dimensions) tuple and the tracked bytes
+  // must be pairwise distinct — a manifest that collapses to duplicate
+  // images misrepresents its own coverage.
+  const manifest = JSON.parse(await fs.readFile(manifestUrl, "utf8"));
+  const seenTuples = new Set();
+  const seenHashes = new Map();
+  for (const name of Object.keys(expectedArtifacts)) {
+    const entry = manifest.artifacts[name];
+    assert.ok(entry.view, `${name} declares its view`);
+    assert.ok(entry.state, `${name} declares its state`);
+    const tuple = JSON.stringify([entry.view, entry.state, entry.dimensions]);
+    assert.ok(!seenTuples.has(tuple), `${name} duplicates another artifact's declared view/state/dimensions`);
+    seenTuples.add(tuple);
+    const digest = crypto.createHash("sha256")
+      .update(await fs.readFile(new URL(name, artifactDirectory))).digest("hex");
+    assert.ok(!seenHashes.has(digest), `${name} is byte-identical to ${seenHashes.get(digest)}`);
+    seenHashes.set(digest, name);
+  }
+});
+
 test("tracked V4 release screenshots match the reviewed artifact manifest", async () => {
   const manifest = JSON.parse(await fs.readFile(manifestUrl, "utf8"));
   assert.equal(manifest.route, "/");
   assert.equal(manifest.state, "explicit synthetic demo with deterministic clean browser context");
-  assert.deepEqual(manifest.requiredVisibleText, [
-    "Living Yard", "Sprinkler system", "Status", "Schedules", "History",
-  ]);
+  // Visible-text contracts are per-artifact (asserted in their own test):
+  // a single global list falsely claimed desktop-only content for the
+  // device-fold artifacts.
   assert.deepEqual(Object.keys(manifest.artifacts).sort(), Object.keys(expectedArtifacts).sort());
 
   for (const [name, dimensions] of Object.entries(expectedArtifacts)) {
@@ -118,7 +141,7 @@ test("release capture is explicit, semantic-gated, and read-only unless requeste
   assert.match(source, /SPRINKLER_PUBLIC_ORIGIN:\s*origin/);
   assert.match(source, /writeArtifacts\s*=\s*process\.argv\.includes\("--write"\)/);
   assert.match(source, /document\.fonts\.ready/);
-  for (const text of ["5m", "15m", "30m", "60m", "Status", "Morning lawn", "Started", "Zones 1, 2", "Schedule"]) {
+  for (const text of ["5m", "15m", "30m", "60m", "Status", "Morning lawn", "Zones 1, 2 started", "Schedule"]) {
     assert.ok(source.includes(JSON.stringify(text)), `capture checks visible ${text}`);
   }
   for (const name of Object.keys(expectedArtifacts)) assert.ok(source.includes(JSON.stringify(name)), `capture defines ${name}`);
@@ -142,4 +165,40 @@ test("committed release validation performs two clean read-only recaptures again
     crypto.createHash("sha256").update(await fs.readFile(new URL(name, artifactDirectory))).digest("hex")
   ));
   assert.deepEqual(trackedAfter, trackedBefore, "validation must not write tracked screenshots");
+});
+
+test("read-only capture exits promptly after its final output (no lingering cleanup timer)", async () => {
+  // Liveness: after the script prints its result and the demo server child
+  // exits, nothing (e.g. an uncleared cleanup timeout) may keep the event
+  // loop alive. The pre-repair race left its losing 5s timer referenced,
+  // so a successful run lingered ~5s after the last byte of output.
+  const child = spawn(process.execPath, ["scripts/capture-release-screenshots.mjs"],
+    { cwd: fileURLToPath(new URL("../", import.meta.url)), stdio: ["ignore", "pipe", "pipe"] });
+  let lastOutputAt = Date.now();
+  child.stdout.on("data", () => { lastOutputAt = Date.now(); });
+  child.stderr.on("data", () => { lastOutputAt = Date.now(); });
+  const code = await new Promise((resolve) => child.once("exit", resolve));
+  const exitDelay = Date.now() - lastOutputAt;
+  assert.equal(code, 0, "read-only capture succeeds");
+  assert.ok(exitDelay <= 2500, `process lingered ${exitDelay}ms after its final output`);
+});
+
+test("manifest declares truthful per-artifact visible text, gated within each captured region", async () => {
+  const manifest = JSON.parse(await fs.readFile(manifestUrl, "utf8"));
+  const source = await fs.readFile(new URL("../scripts/capture-release-screenshots.mjs", import.meta.url), "utf8");
+  // The old global claim asserted text (e.g. "Living Yard", "History") that
+  // device-fold artifacts do not contain; each artifact must declare its
+  // own truthful list instead, and the capture must verify every entry
+  // INSIDE that artifact's clip region — not merely somewhere on the page.
+  assert.equal("requiredVisibleText" in manifest, false, "the untruthful global claim is gone");
+  for (const name of Object.keys(expectedArtifacts)) {
+    const entry = manifest.artifacts[name];
+    assert.ok(Array.isArray(entry.requiredVisibleText) && entry.requiredVisibleText.length >= 3,
+      `${name} declares its own visible-text contract`);
+    for (const text of entry.requiredVisibleText) {
+      assert.ok(source.includes(JSON.stringify(text)), `capture gates ${name}: ${JSON.stringify(text)}`);
+    }
+  }
+  assert.match(source, /missingWithinClip/, "capture verifies text inside the clip region");
+  assert.match(source, /DECOY/, "capture proves the in-clip checker can detect absent text");
 });

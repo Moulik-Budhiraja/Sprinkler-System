@@ -6,6 +6,10 @@ let selectedDuration = QUICK_TASK_DEFAULT_DURATION;
 let quickTaskControllerAvailable = false;
 let quickTaskAmbiguous = false;
 let currentTasks = [];
+// True once ANY successful controller read happened this session: the
+// explicit line between no-known-data (announce unavailable, claim
+// nothing) and stale-last-known (re-present known facts, qualified).
+let hasSyncedControllerState = false;
 let startingZones = [];
 let field;
 let refreshInFlight = false;
@@ -73,8 +77,13 @@ function setControllerStatus(state) {
   if (status) status.textContent = state === "online" ? "Controller online" : state === "busy" ? "Controller busy · try again shortly" : state === "stale" ? "Controller offline · last known state" : "Controller offline";
   wrap?.classList.toggle("offline", state !== "online" && state !== "busy");
   if (freshness) {
-    freshness.dataset.state = state === "online" ? "live" : state === "busy" ? "busy" : "stale";
-    freshness.textContent = state === "online" ? "Controller status current" : state === "busy" ? "Controller busy · try again shortly" : "Controller offline · showing stale last-known state";
+    freshness.dataset.state = state === "online" ? "live" : state;
+    // "last-known" may only ever be claimed when known state actually
+    // exists (state === "stale"); a fresh outage has no data to show.
+    freshness.textContent = state === "online" ? "Controller status current"
+      : state === "busy" ? "Controller busy · try again shortly"
+        : state === "stale" ? "Controller offline · showing stale last-known state"
+          : "Controller offline · no data received yet";
   }
 }
 
@@ -96,6 +105,67 @@ function describeSelection(zones) {
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
+/* The floating island must NEVER cover the field, a silhouette, or an
+ * anchored Stop/Remove dock — and it must never restrict scrolling or
+ * focus. Where the fixed bottom-right island fits below the field at
+ * scroll-top, it stays fixed. Where it cannot (short desktop windows),
+ * it becomes DOCUMENT-ANCHORED: absolutely positioned in the dashboard
+ * just below the field, over a reserved band that pushes Schedules and
+ * History down, so it scrolls WITH the page — it can never cover the
+ * field and never needs a scroll floor. The mode choice compares
+ * scroll-invariant document geometry, so it never flaps with scrolling. */
+function syncQuickTaskIslandPlacement() {
+  const island = document.querySelector("[data-testid=quick-task-island]");
+  if (!island) return;
+  if (!island.__placementObserved && typeof ResizeObserver === "function") {
+    island.__placementObserved = true;
+    const observer = new ResizeObserver(syncQuickTaskIslandPlacement);
+    observer.observe(island);
+    // Layout settling above the lawn (fonts, sections) moves the field's
+    // document bottom without any island resize; body size tracks it.
+    observer.observe(document.body);
+  }
+  const dashboard = document.querySelector(".shell.dashboard");
+  const clearDocked = () => {
+    island.classList.remove("qt-island-docked");
+    dashboard?.classList.remove("quick-task-docked");
+    dashboard?.style.removeProperty("--qt-island-top");
+    dashboard?.style.removeProperty("--qt-island-band");
+  };
+  if (island.hidden || !dashboard) {
+    clearDocked();
+    return;
+  }
+  const field = document.querySelector("[data-testid=field]");
+  if (!field) {
+    clearDocked();
+    return;
+  }
+  const height = island.scrollHeight + 2;
+  const fieldRect = field.getBoundingClientRect();
+  const fieldDocBottom = fieldRect.bottom + window.scrollY;
+  // The never-cover contract applies at EVERY width. The fixed anchor
+  // differs per layout: desktop floats 24px off the viewport bottom;
+  // mobile floats 10px above the fixed nav (whose measured height already
+  // carries the safe-area inset). The field's own bottom margin is the
+  // reserved dock band — docks live there, so clearance includes it.
+  const mobile = !window.matchMedia("(min-width: 900px)").matches;
+  const nav = document.querySelector(".mobile-nav");
+  const bottomGap = mobile && nav ? nav.getBoundingClientRect().height + 10 : 24;
+  const dockBand = Number.parseFloat(getComputedStyle(field).marginBottom) || 0;
+  const naturalTop = window.innerHeight - bottomGap - height;
+  if (fieldDocBottom + dockBand + 8 > naturalTop) {
+    const dashboardDocTop = dashboard.getBoundingClientRect().top + window.scrollY;
+    dashboard.classList.add("quick-task-docked");
+    dashboard.style.setProperty("--qt-island-top", `${Math.round(fieldDocBottom + dockBand - dashboardDocTop + 8)}px`);
+    dashboard.style.setProperty("--qt-island-band", `${Math.round(height + 24)}px`);
+    island.classList.add("qt-island-docked");
+  } else {
+    clearDocked();
+  }
+}
+window.addEventListener("resize", syncQuickTaskIslandPlacement);
+
 function syncQuickTaskIsland() {
   const island = document.querySelector("[data-testid=quick-task-island]");
   if (!island) return;
@@ -107,7 +177,16 @@ function syncQuickTaskIsland() {
     : zones;
   const summary = $("#quickTaskZones");
   if (summary) summary.textContent = describeSelection(summaryZones);
+  const islandWasHidden = island.hidden;
   island.hidden = zones.length === 0 && !pendingManualMutation;
+  // The dashboard reserves island scroll clearance only while it is open.
+  document.querySelector(".shell.dashboard")?.classList.toggle("quick-task-open", !island.hidden);
+  syncQuickTaskIslandPlacement();
+  if (islandWasHidden && !island.hidden && island.classList.contains("qt-island-docked")) {
+    // One-time reveal on open: bring the document-anchored island into
+    // view; afterwards the user scrolls completely freely.
+    island.scrollIntoView({ block: "nearest" });
+  }
   if (island.hidden) {
     const message = $("#quickMessage");
     const persistentFeedback = $("#fieldMutationFeedback");
@@ -380,6 +459,7 @@ async function refreshTasks() {
     }
     startingZones = [];
     quickTaskControllerAvailable = true;
+    hasSyncedControllerState = true;
     setControllerStatus("online");
     field.update({ tasks: currentTasks, startingZones, stale: false });
     if (pendingManualMutation && !pendingManualSelectionMatchesPayload() && pendingManualZonesAreIdle()) {
@@ -388,8 +468,19 @@ async function refreshTasks() {
   } catch (error) {
     quickTaskControllerAvailable = false;
     const busy = error?.data?.kind === "read_overload";
-    setControllerStatus(busy ? "busy" : currentTasks.length ? "stale" : "offline");
-    field.update({ tasks: currentTasks, startingZones, stale: !busy });
+    // One truth model for every read failure (offline, timeout, reject,
+    // abort, busy/overload):
+    //  - no successful read yet  -> announce unavailable; claim nothing;
+    //    disable everything; zero docks.
+    //  - known last state        -> re-present it qualified as stale;
+    //    withdraw every control/dock; keep shared-task facts truthful.
+    setControllerStatus(busy ? "busy" : hasSyncedControllerState ? "stale" : "offline");
+    field.update({
+      tasks: currentTasks,
+      startingZones,
+      stale: hasSyncedControllerState,
+      offline: !hasSyncedControllerState,
+    });
   } finally {
     updateQuickTaskSubmit();
     refreshInFlight = false;
@@ -480,11 +571,10 @@ function setupQuickTask() {
 
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape" || !field || !selectedZones.size) return;
-    // A Stop/Remove popover owns Escape while it is open (the field marks a
-    // consumed Escape via preventDefault); a pending create keeps its
+    // A busy-zone status selection owns Escape while it is active (the field
+    // marks a consumed Escape via preventDefault); a pending create keeps its
     // selection so recovery stays anchored to the same payload.
     if (event.defaultPrevented) return;
-    if (document.querySelector("[data-testid=zone-action-popover]")) return;
     if (pendingManualMutation || quickTaskAmbiguous || quickTaskRetryWaiting) return;
     const island = document.querySelector("[data-testid=quick-task-island]");
     field.clearIdleSelection({ refocus: Boolean(island?.contains(document.activeElement)) });
@@ -506,7 +596,9 @@ function taskSequence(schedule) {
 }
 
 function scheduleRow(id, schedule, dedicated) {
-  const row = node("article", dedicated ? "schedule-data-row" : "schedule-summary-row");
+  // Today summary rows are real links into the exact schedule on /schedules;
+  // the dedicated page rows are focusable anchor targets for that link.
+  const row = node(dedicated ? "article" : "a", dedicated ? "schedule-data-row" : "schedule-summary-row");
   row.dataset.scheduleRow = id;
   const name = node("strong", "schedule-name", schedule.name || "Untitled schedule");
   const state = node("span", "schedule-state", schedule.enabled ? "Enabled" : "Paused");
@@ -516,9 +608,21 @@ function scheduleRow(id, schedule, dedicated) {
   top.append(name, state, time);
   row.append(top);
   if (!dedicated) {
+    row.dataset.scheduleLink = "";
+    row.href = `/schedules#${encodeURIComponent(id)}`;
+    // The aria-label supersedes the row contents in the accessible-name
+    // computation, so it must carry everything the row shows: identifier,
+    // Enabled/Paused status, start time, and the navigation purpose.
+    row.setAttribute(
+      "aria-label",
+      `${schedule.name || "Untitled schedule"}, ${schedule.enabled ? "Enabled" : "Paused"}, ${formatTime(schedule.startTime)} — open in all schedules`
+    );
     row.append(node("span", "schedule-summary-meta", taskSequence(schedule)));
+    row.addEventListener("click", rememberTodayScroll);
     return row;
   }
+  row.id = id;
+  row.tabIndex = -1;
   const days = node("div", "schedule-days", (schedule.days || []).map((day) => DAY_NAMES[day]).join(" · "));
   days.dataset.scheduleDays = "";
   const sequence = node("div", "schedule-sequence", taskSequence(schedule));
@@ -567,10 +671,29 @@ function renderSchedules(data) {
   for (const [id, schedule] of visible) container.append(scheduleRow(id, schedule, dedicated));
 }
 
+/* Deep link from a Today schedule row: focus, scroll to and highlight the
+ * exact schedule row named by the URL hash on the dedicated page. */
+function focusScheduleFromHash() {
+  if (document.body.dataset.page !== "schedules") return;
+  const raw = location.hash.slice(1);
+  if (!raw) return;
+  let id = raw;
+  try { id = decodeURIComponent(raw); } catch {}
+  const row = document.getElementById(id);
+  if (!row || row.dataset.scheduleRow === undefined) return;
+  document.querySelectorAll(".schedule-data-row.is-highlighted")
+    .forEach((other) => other.classList.remove("is-highlighted"));
+  row.classList.add("is-highlighted");
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  row.scrollIntoView({ block: "center", behavior: reduceMotion ? "auto" : "smooth" });
+  row.focus({ preventScroll: true });
+}
+
 async function refreshSchedules() {
   if (!$("#schedules")) return;
   try { renderSchedules(await request("/api/schedules")); }
   catch { $("#schedules").replaceChildren(node("p", "empty", "Schedules unavailable")); }
+  focusScheduleFromHash();
 }
 
 function renderHistory(events) {
@@ -578,7 +701,7 @@ function renderHistory(events) {
   if (!container) return;
   container.replaceChildren();
   const dedicated = document.body.dataset.page === "activity";
-  const visible = dedicated ? events : events.slice(0, 4);
+  const visible = dedicated ? events : events.slice(0, 8);
   if (!visible.length) return container.append(node("p", "empty", "No history"));
   let currentDate = "";
   for (const event of visible) {
@@ -591,15 +714,22 @@ function renderHistory(events) {
         container.append(heading);
       }
     }
-    const row = node("div", dedicated ? "history-data-row" : "history-summary-row");
+    // One coherent row: a colour glyph (decorative), a primary phrase such
+    // as "Zones 1, 4 stopped", and attached metadata "Remote · 1:26 AM".
+    const row = node("div", "history-row");
     row.dataset.historyRow = "";
     const zones = (event.zones || []).join(", ");
     const eventName = event.event || "Event";
-    const state = node("strong", `history-event ${eventName.toLowerCase().replaceAll(" ", "-")}`, eventName);
-    const zoneText = node("span", "history-zones", `${event.zones?.length === 1 ? "Zone" : "Zones"} ${zones}`);
-    const reason = node("span", "history-reason", event.reason || "Controller");
-    const time = node("time", "history-time mono", dedicated ? formatClock(event.timestamp) : relativeTime(event.timestamp));
-    row.append(time, state, zoneText, reason);
+    const icon = node("span", `history-icon ${eventName.toLowerCase().replaceAll(" ", "-")}`);
+    icon.setAttribute("aria-hidden", "true");
+    const body = node("div", "history-body");
+    const primary = node("p", "history-primary",
+      `${event.zones?.length === 1 ? "Zone" : "Zones"} ${zones} ${eventName.toLowerCase()}`);
+    const meta = node("p", "history-meta", `${event.reason || "Controller"} · `);
+    const time = node("time", "mono", dedicated ? formatClock(event.timestamp) : relativeTime(event.timestamp));
+    meta.append(time);
+    body.append(primary, meta);
+    row.append(icon, body);
     container.append(row);
   }
 }
@@ -609,6 +739,53 @@ async function refreshHistory() {
   try { renderHistory(await request("/api/history?limit=250")); }
   catch { $("#history").replaceChildren(node("p", "empty", "History unavailable")); }
 }
+
+/* Back-restoration of the Today context. Native scroll restoration runs
+ * against the PRE-hydration document (schedules/history render async), so
+ * on shorter desktop documents Back lands at the top. The intended offset
+ * is remembered when a schedule deep link is activated and re-applied
+ * after hydration — only on genuine back/forward returns (including
+ * BFCache pageshow), never on direct loads, with no history mutation. */
+const TODAY_SCROLL_KEY = "living-yard-today-scroll";
+
+function rememberTodayScroll() {
+  try {
+    sessionStorage.setItem(TODAY_SCROLL_KEY, String(Math.round(window.scrollY)));
+  } catch {}
+}
+
+function maybeRestoreTodayScroll(fromPageShow = false) {
+  if (location.hash) return;
+  let stored = null;
+  try {
+    stored = sessionStorage.getItem(TODAY_SCROLL_KEY);
+  } catch {}
+  if (stored === null) return;
+  const [entry] = (performance.getEntriesByType && performance.getEntriesByType("navigation")) || [];
+  const backForward = fromPageShow || (entry && entry.type === "back_forward");
+  try {
+    sessionStorage.removeItem(TODAY_SCROLL_KEY);
+  } catch {}
+  // A direct load discards the stale context instead of hijacking scroll.
+  if (!backForward) return;
+  const target = Number.parseInt(stored, 10);
+  if (!Number.isFinite(target) || target <= 0) return;
+  const started = performance.now();
+  const apply = () => {
+    const max = document.documentElement.scrollHeight - window.innerHeight;
+    if (max >= target - 4 || performance.now() - started > 2000) {
+      const destination = Math.min(target, Math.max(0, max));
+      if (Math.abs(window.scrollY - destination) > 4) window.scrollTo(0, destination);
+      return;
+    }
+    requestAnimationFrame(apply);
+  };
+  apply();
+}
+
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted) maybeRestoreTodayScroll(true);
+});
 
 document.addEventListener("DOMContentLoaded", () => {
   const fieldElement = $("#sprinklerField");
@@ -636,4 +813,5 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   refreshSchedules();
   refreshHistory();
+  maybeRestoreTodayScroll();
 });

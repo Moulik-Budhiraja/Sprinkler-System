@@ -13,7 +13,16 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     reducedMotion: "reduce",
+    // The installed runner build drops the dedicated reducedMotion fixture;
+    // contextOptions reaches browser.newContext directly in both cases.
+    contextOptions: { reducedMotion: "reduce" },
   },
+  projects: [
+    { name: "chromium", use: { browserName: "chromium" } },
+    // WebKit approximates iPhone Safari rendering for the geometry,
+    // formatting, scroll and overflow repair specs.
+    { name: "webkit", use: { browserName: "webkit" }, testMatch: /design-repair-.*\.spec\.js/ },
+  ],
   webServer: {
     command: "node tests/fixture-server.js",
     url: "http://127.0.0.1:4178/healthz",

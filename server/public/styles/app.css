@@ -315,18 +315,30 @@ button:disabled {
   grid-area: history;
 }
 
+/* Clearance so every dashboard row — including History source/time
+ * metadata and the refresh control — can scroll above the floating Quick
+ * Task island. Reserved only while the island is actually open (the
+ * .quick-task-open class mirrors the island's hidden state); sections
+ * above never move because the padding sits at the document's end. */
+@media (min-width: 900px) {
+  .shell.dashboard.quick-task-open {
+    padding-bottom: 210px;
+  }
+}
+
 /* ------------------------------------------------------------- quick task island
  * The Today Quick Task is contextual: the field itself is the zone selector.
- * The island is an overlay anchored to the field's grid area on desktop and
- * fixed above the bottom navigation on mobile — it never joins document flow,
- * so field/schedules/history geometry is identical whether it is open or not. */
+ * The island floats fixed at the viewport's bottom corner on desktop and
+ * above the bottom navigation on mobile — it never joins document flow and
+ * never covers the field, its sprinklers or their anchored Stop/Remove
+ * controls, so field/schedules/history geometry is identical whether it is
+ * open or not. */
 
 .qt-island {
-  position: absolute;
-  grid-area: field;
-  right: 16px;
-  bottom: 14px;
-  z-index: 6;
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 30;
   width: min(340px, calc(100% - 32px));
   background: var(--surface);
   border: 1px solid var(--line);
@@ -472,7 +484,7 @@ button:disabled {
   position: relative;
   border-radius: 18px;
   background: #0d1815;
-  aspect-ratio: 1140 / 524;
+  aspect-ratio: 1140 / 560;
 }
 
 .field.offline .char {
@@ -569,42 +581,29 @@ button:disabled {
   text-anchor: middle;
 }
 
-/* organic contour — hidden at rest, revealed on selection / keyboard focus */
-.char-contour {
-  fill: none;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+/* selection outline — the exact silhouette dilated by a uniform rendered
+ * gap (stroke widths are set per zone scale by field.js); hidden at rest,
+ * revealed on selection / keyboard focus */
+.selection-outline {
   opacity: 0;
   transition: opacity 120ms ease;
 }
 
-.contour-halo {
+.outline-halo {
   stroke: var(--water);
-  stroke-width: 5;
+  fill: var(--water);
+  opacity: 0.22;
 }
 
-.contour-keyline {
+.outline-keyline {
   stroke: var(--focus);
-  stroke-width: 2;
+  fill: var(--focus);
+  opacity: 0.95;
 }
 
-.contour-focus {
-  stroke: var(--text);
-  stroke-width: 1;
-}
-
-.is-selected .contour-halo,
-.field-zone:focus-visible .contour-halo {
-  opacity: 0.14;
-}
-
-.is-selected .contour-keyline,
-.field-zone:focus-visible .contour-keyline {
-  opacity: 0.92;
-}
-
-.field-zone:focus-visible .contour-focus {
-  opacity: 0.9;
+.is-selected .selection-outline,
+.field-zone:focus-visible .selection-outline {
+  opacity: 1;
 }
 
 .char-anchor {
@@ -771,11 +770,12 @@ button:disabled {
   }
 }
 
-/* progress waterline: thin, textless, running heads only */
+/* progress waterline: thin, textless, running heads only.
+ * left/top are set by field.js from the rendered silhouette geometry. */
 .waterline {
   position: absolute;
   left: 50%;
-  bottom: -6px;
+  top: 100%;
   transform: translateX(-50%);
   width: 46px;
   height: 2px;
@@ -797,27 +797,27 @@ button:disabled {
   transition: width 600ms linear;
 }
 
-/* ------------------------------------------------------------- popover */
+/* -------------------------------------------------- anchored zone docks
+ * Each running/queued zone owns its Stop/Remove control, anchored just
+ * below that zone's silhouette centreline (left/top set by field.js). */
 
-.zone-popover {
+.zone-dock {
   position: absolute;
-  top: 26%;
+  left: 50%;
+  top: 100%;
   z-index: 5;
+  transform: translateX(-50%);
   display: flex;
-  align-items: center;
+  justify-content: center;
 }
 
-.zone-popover.popover-left {
-  right: calc(100% - 10px);
-}
-
-.zone-popover.popover-right {
-  left: calc(100% - 10px);
+.zone-dock[hidden] {
+  display: none;
 }
 
 .valve-btn {
-  width: 56px;
-  height: 56px;
+  width: 44px;
+  height: 44px;
   padding: 0;
   border: none;
   background: none;
@@ -830,8 +830,8 @@ button:disabled {
 
 .valve {
   display: block;
-  width: 56px;
-  height: 56px;
+  width: 44px;
+  height: 44px;
   overflow: visible;
 }
 
@@ -919,7 +919,7 @@ button:disabled {
   filter: saturate(0.3);
 }
 
-.zone-popover.is-stopping .valve-drips {
+.zone-dock.is-stopping .valve-drips {
   opacity: 1;
   animation: droplet-fall 400ms ease-in forwards;
 }
@@ -933,6 +933,7 @@ button:disabled {
   background: rgba(18, 32, 27, 0.92);
   border: 1px solid var(--line);
   border-radius: 22px 8px 8px 22px;
+  white-space: nowrap;
 }
 
 .coupler {
@@ -1342,26 +1343,25 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
-  body {
-    display: grid;
-    grid-template-rows: auto minmax(0, 1fr) calc(58px + env(safe-area-inset-bottom, 0px));
-    height: 100dvh;
-    min-height: 0;
-    overflow: hidden;
-  }
-
-  .shell {
-    min-height: 0;
-    overflow-y: auto;
-    overscroll-behavior: contain;
+  /* One natural document scroll: no fixed-height body grid and no nested
+   * scroll pane. The fixed bottom navigation carries the safe-area inset
+   * and content keeps clearance above it via shell bottom padding. */
+  html {
     scroll-padding-block: 18px;
   }
 
+  body {
+    padding-bottom: calc(58px + env(safe-area-inset-bottom, 0px));
+  }
+
   .mobile-nav {
-    position: static;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
     z-index: 20;
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     height: calc(58px + env(safe-area-inset-bottom, 0px));
     padding-bottom: env(safe-area-inset-bottom, 0px);
     background: var(--surface);
@@ -1372,6 +1372,8 @@ button:disabled {
     display: grid;
     place-items: center;
     min-height: 44px;
+    min-width: 0;
+    overflow: hidden;
     color: var(--text-muted);
     font-size: 11px;
   }
