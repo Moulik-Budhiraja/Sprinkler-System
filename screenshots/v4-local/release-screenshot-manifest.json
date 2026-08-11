@@ -23,7 +23,7 @@
         1440,
         900
       ],
-      "sha256": "550c29a51e8ea03a5b6960735e3e8bcdca2ee1843ffdc239d9426892a69bdbc4"
+      "sha256": "e88a2ecfedbae420c6576d8ee5d0141e176c07aa9aa8ca1a39632ea2d4e04e7d"
     },
     "desktop-1440-standalone.png": {
       "view": "full-window",
@@ -45,7 +45,7 @@
         1440,
         900
       ],
-      "sha256": "111955c2a3c6b52fcc8dd9fe06db000aaaf15cd3f9202efe5ccd131f3c1f8d21"
+      "sha256": "83a5b321ba465b668e8a7fe3f42adebed2c98144248d15d6ce7dcc6126708500"
     },
     "mobile-844-copy.png": {
       "view": "full-document",
@@ -67,7 +67,7 @@
         390,
         1135
       ],
-      "sha256": "9a901ed4c04a47696f1e8a9a0794c6432a61d552491049b86a41551650544ff9"
+      "sha256": "a23dcba4ed5384e6ca70402e8b46be0233698d564f771a6dd4d5ba9457fed9bc"
     },
     "mobile-1067-copy.png": {
       "view": "device-fold",
@@ -87,7 +87,7 @@
         390,
         1067
       ],
-      "sha256": "94fc9163bc4c8872ae3e7a685389ef53b7ebaba1b2a0e135b52c491f1e74b7a4"
+      "sha256": "dcf13fba028de8f97e7e15eac67444407b4e803c237263df1ca01752da4c55cc"
     },
     "mobile-390x844-standalone.png": {
       "view": "device-fold",
@@ -107,7 +107,7 @@
         390,
         844
       ],
-      "sha256": "4ab9b3fbbd3606a7ecbb4554a9109b27a481e4cff581c7cd186e5f83d6eaef89"
+      "sha256": "58feb988601c9e311743f36c12ace7d8f64649a28749eb786adad135094ff701"
     }
   }
 }

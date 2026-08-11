@@ -770,8 +770,10 @@ button:disabled {
   }
 }
 
-/* progress waterline: thin, textless, running heads only.
- * left/top are set by field.js from the rendered silhouette geometry. */
+/* progress waterline: thin, textless, running heads only. While the zone's
+ * Stop control is docked it seats directly beneath the housing — part of
+ * the same assembly, never a floating bar across the connector stem — and
+ * rests under the head otherwise (left/top set by field.js). */
 .waterline {
   position: absolute;
   left: 50%;
@@ -782,6 +784,7 @@ button:disabled {
   border-radius: 1px;
   background: var(--deep-water);
   opacity: 0;
+  pointer-events: none;
 }
 
 .is-active .waterline,
@@ -798,8 +801,43 @@ button:disabled {
 }
 
 /* -------------------------------------------------- anchored zone docks
- * Each running/queued zone owns its Stop/Remove control, anchored just
- * below that zone's silhouette centreline (left/top set by field.js). */
+ * Each running/queued zone owns its Stop/Remove control, hung off its own
+ * sprinkler: the dock's housing port sits on the silhouette's attachment
+ * axis and the connector stem below joins them into one continuous
+ * assembly (left/top and paths set by field.js). */
+
+/* connector stem: painted supply pipe from the silhouette base into the
+ * housing port. Sits above the character art (its collar couples onto the
+ * riser base) and below the housing (its tail tucks underneath), and is
+ * never interactive. */
+.dock-connector {
+  position: absolute;
+  z-index: 4;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.dock-connector .pipe {
+  fill: none;
+  stroke: #31423a; /* pipe metal: distinct from lawn, bodies and skirt */
+  stroke-width: 7;
+  stroke-linecap: round;
+}
+
+.dock-connector .pipe-core {
+  fill: none;
+  stroke: var(--char-light);
+  stroke-width: 2;
+  stroke-linecap: round;
+  opacity: 0.45;
+}
+
+.dock-connector .pipe-collar {
+  fill: none;
+  stroke: #31423a;
+  stroke-width: 12;
+  stroke-linecap: round;
+}
 
 .zone-dock {
   position: absolute;

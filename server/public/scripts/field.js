@@ -245,6 +245,37 @@
     return best;
   }
 
+  /* Exact silhouette base attachment: the midpoint of the physical
+   * silhouette's ground-touching bottom edge plus the stem axis direction
+   * (unit vector pointing into the ground), honouring the whole-body pose.
+   * This is where each zone's Stop/Remove connector physically emerges —
+   * always a real silhouette boundary point, never the bounding box, wrap,
+   * spray, shadow or label. */
+  function silhouetteAttachment(character) {
+    if (character._attachment) return character._attachment;
+    const points = [];
+    for (const part of character.parts) {
+      const corners = part.points
+        ? part.points.trim().split(/\s+/).map((pair) => pair.split(",").map(Number))
+        : [[part.x, part.y + part.h], [part.x + part.w, part.y + part.h]];
+      for (let corner of corners) {
+        if (part.rot) corner = rotatePoint(corner, part.rot);
+        if (character.pose) corner = rotatePoint(corner, character.pose);
+        points.push(corner);
+      }
+    }
+    const groundY = Math.max(...points.map(([, y]) => y));
+    const baseXs = points.filter(([, y]) => y >= groundY - 1.5).map(([x]) => x);
+    const poseRad = (((character.pose && character.pose.a) || 0) * Math.PI) / 180;
+    character._attachment = {
+      x: (Math.min(...baseXs) + Math.max(...baseXs)) / 2,
+      y: groundY,
+      dirX: -Math.sin(poseRad),
+      dirY: Math.cos(poseRad),
+    };
+    return character._attachment;
+  }
+
   /* Zone-to-character maps come from the approved Paper boards; desktop and
    * mobile assign numerals independently by visual row order. */
   const LAYOUTS = {
@@ -492,13 +523,24 @@
         waterline.innerHTML = `<div class="waterline-fill"></div>`;
 
         /* Every running/queued zone owns this dock: its Stop/Remove control,
-         * anchored just below the zone's own silhouette centreline. */
+         * one continuous mechanical assembly with its own sprinkler through
+         * the connector stem below. */
         const dock = document.createElement("div");
         dock.className = "zone-dock";
         dock.dataset.zoneDock = String(entry.z);
         dock.hidden = true;
 
-        wrap.append(btn, waterline, dock);
+        /* The connector: a painted supply stem that begins at the rendered
+         * silhouette's base attachment point and terminates tucked into the
+         * dock's housing (path set by syncGeometry). Presentation only. */
+        const connector = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        connector.setAttribute("class", "dock-connector");
+        connector.setAttribute("aria-hidden", "true");
+        connector.setAttribute("focusable", "false");
+        connector.innerHTML = '<path class="pipe-collar"/><path class="pipe"/><path class="pipe-core"/>';
+        connector.style.display = "none";
+
+        wrap.append(btn, waterline, connector, dock);
         container.appendChild(wrap);
         // The keep-inside-the-lawn clamp must re-run whenever the dock's own
         // content size changes (e.g. text scaling widens the Remove pill),
@@ -509,9 +551,33 @@
       syncGeometry();
     }
 
+    /* The housing port: the exact point on a dock's control where its
+     * connector stem enters — the valve wheel's centre for Stop, the
+     * disconnect coupler's centreline for Remove — in wrap-relative CSS px.
+     * Deriving it from the control's own rendered parts keeps the assembly
+     * truthful for both control kinds and the compact Remove form. */
+    function dockPort(dock, wrapRect) {
+      const control = dock.querySelector("button");
+      if (!control) return null;
+      const wheel = control.querySelector(".valve-wheel");
+      const anchor = wheel || control.querySelector(".coupler") || control;
+      const anchorRect = anchor.getBoundingClientRect();
+      const controlRect = control.getBoundingClientRect();
+      if (!controlRect.width || !controlRect.height) return null;
+      // The entry point sits INSIDE the housing, below its opaque top face
+      // (the valve's octagon rim, the Remove pill's filled body), so the
+      // stem's tail is always overpainted by the housing — a visible tuck
+      // with no seam at any scale or engine.
+      return {
+        x: anchorRect.left + anchorRect.width / 2 - wrapRect.left,
+        y: controlRect.top + (wheel ? 18 : 10) - wrapRect.top,
+      };
+    }
+
     /* Position and scale everything that must track the rendered silhouette:
      * outline stroke widths (so the gap is uniform in CSS pixels at every
-     * zone size), the waterline, and each zone's anchored control dock.
+     * zone size), the waterline, each zone's anchored control dock, and the
+     * connector stem that joins silhouette and dock into one assembly.
      * preserveAspectRatio letterboxing is accounted for explicitly. */
     function syncGeometry() {
       if (!state.layout) return;
@@ -593,7 +659,28 @@
         const dock = wrap.querySelector(".zone-dock");
         dock.style.left = `${(offsetX + ((bbox.minX + bbox.maxX) / 2) * scale).toFixed(1)}px`;
         dock.style.top = `${(contentBottom + 8).toFixed(1)}px`;
-        if (dock.childElementCount) dockJobs.push({ entry, dock });
+        /* The zone's own attachment axis in wrap-relative CSS px: where the
+         * connector emerges from the silhouette base, continuing the stem
+         * direction. The dock's ideal position puts its housing PORT on
+         * that axis, so the whole control visibly hangs off its sprinkler
+         * rather than floating near a generic row coordinate. */
+        const attachment = silhouetteAttachment(CHARACTERS[entry.kind]);
+        metric.attach = {
+          x: offsetX + attachment.x * scale,
+          y: offsetY + attachment.y * scale,
+          dirX: attachment.dirX,
+          dirY: attachment.dirY,
+        };
+        if (dock.childElementCount) {
+          const port = dockPort(dock, wrapRect);
+          if (port) {
+            const axisX = metric.attach.x +
+              metric.attach.dirX * ((port.y - metric.attach.y) / metric.attach.dirY);
+            const centre = Number.parseFloat(dock.style.left);
+            dock.style.left = `${(axisX - (port.x - centre)).toFixed(1)}px`;
+          }
+          dockJobs.push({ entry, dock });
+        }
       }
       /* Multi-pass dock resolution: every dock must clear the lawn edges,
        * every OTHER zone's activation region, and every OTHER dock —
@@ -706,6 +793,82 @@
           if (Math.abs(after.left - before.left) > 0.5 || Math.abs(after.top - before.top) > 0.5) anyMoved = true;
         }
         if (!anyMoved) break;
+      }
+      /* Assembly pass, after every dock has settled: paint each busy zone's
+       * connector as one continuous stem from the silhouette's base
+       * attachment point into its own housing port. When the solver had to
+       * shift a dock aside, the cubic bend still visibly originates at the
+       * sprinkler and terminates at the same control. The status rail seats
+       * beneath its own housing — part of the assembly, never a bar floating
+       * across the connection — and returns to its resting spot under the
+       * head whenever the zone has no control (idle/stale/offline). */
+      for (const metric of zoneMetrics) {
+        const { wrap, rect: wrapRect } = metric;
+        const connector = wrap.querySelector(".dock-connector");
+        if (!connector || !metric.attach) continue;
+        const dock = wrap.querySelector(".zone-dock");
+        const control = !dock.hidden && dock.childElementCount ? dock.querySelector("button") : null;
+        const port = control ? dockPort(dock, wrapRect) : null;
+        if (!port) {
+          connector.style.display = "none";
+          continue;
+        }
+        const a = metric.attach;
+        // Start 3px inside the silhouette base so pipe and body always
+        // overlap; end at the housing port so the housing overpaints the
+        // stem's tail — visible continuity at both joints at every scale.
+        const startX = a.x - a.dirX * 3;
+        const startY = a.y - a.dirY * 3;
+        // When the dock had to shift off the attachment axis, route the stem
+        // as irrigation plumbing: straight down the axis, a rounded elbow, a
+        // horizontal run just above the housing, and a straight vertical
+        // entry leg into the port — so the stem still visibly leaves the
+        // sprinkler on its own axis AND arrives at its own port vertically.
+        const axisAtEntry = a.x + a.dirX * ((port.y - a.y) / a.dirY);
+        const shift = port.x - axisAtEntry;
+        let path;
+        if (Math.abs(shift) <= 1.5) {
+          path = `M${startX.toFixed(2)} ${startY.toFixed(2)} L${port.x.toFixed(2)} ${port.y.toFixed(2)}`;
+        } else {
+          const sign = shift > 0 ? 1 : -1;
+          const radius = Math.min(7, Math.abs(shift) / 2);
+          // The elbow stays well above the housing's painted top face: the
+          // final approach into the port is a straight vertical leg, so the
+          // stem visibly arrives AT the port rather than grazing a corner.
+          const jointY = Math.min(
+            Math.max(a.y + 6 + radius, port.y - 22),
+            port.y - radius - 2
+          );
+          const axisX = a.x + a.dirX * ((jointY - a.y) / a.dirY);
+          path = `M${startX.toFixed(2)} ${startY.toFixed(2)} ` +
+            `L${axisX.toFixed(2)} ${(jointY - radius).toFixed(2)} ` +
+            `Q${axisX.toFixed(2)} ${jointY.toFixed(2)} ${(axisX + sign * radius).toFixed(2)} ${jointY.toFixed(2)} ` +
+            `L${(port.x - sign * radius).toFixed(2)} ${jointY.toFixed(2)} ` +
+            `Q${port.x.toFixed(2)} ${jointY.toFixed(2)} ${port.x.toFixed(2)} ${(jointY + radius).toFixed(2)} ` +
+            `L${port.x.toFixed(2)} ${port.y.toFixed(2)}`;
+        }
+        const collar = `M${(a.x - a.dirX * 2.2).toFixed(2)} ${(a.y - a.dirY * 2.2).toFixed(2)} ` +
+          `L${(a.x + a.dirX * 2.2).toFixed(2)} ${(a.y + a.dirY * 2.2).toFixed(2)}`;
+        const minX = Math.min(startX, port.x) - 10;
+        const maxX = Math.max(startX, port.x) + 10;
+        const minY = Math.min(startY, port.y) - 10;
+        const maxY = Math.max(startY, port.y) + 10;
+        connector.style.display = "";
+        connector.style.left = `${minX.toFixed(1)}px`;
+        connector.style.top = `${minY.toFixed(1)}px`;
+        connector.style.width = `${(maxX - minX).toFixed(1)}px`;
+        connector.style.height = `${(maxY - minY).toFixed(1)}px`;
+        connector.setAttribute(
+          "viewBox",
+          `${minX.toFixed(1)} ${minY.toFixed(1)} ${(maxX - minX).toFixed(1)} ${(maxY - minY).toFixed(1)}`
+        );
+        connector.querySelector(".pipe").setAttribute("d", path);
+        connector.querySelector(".pipe-core").setAttribute("d", path);
+        connector.querySelector(".pipe-collar").setAttribute("d", collar);
+        const controlRect = control.getBoundingClientRect();
+        const waterline = wrap.querySelector(".waterline");
+        waterline.style.left = `${port.x.toFixed(1)}px`;
+        waterline.style.top = `${(controlRect.bottom - wrapRect.top - 6).toFixed(1)}px`;
       }
     }
 

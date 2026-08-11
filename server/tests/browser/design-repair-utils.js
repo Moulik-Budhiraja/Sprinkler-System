@@ -430,7 +430,7 @@ export async function makeBusyZones(page) {
  * scale, so engine- and DPR-specific paint differences are visible to the
  * assertion — unlike the construction-model instrument above. */
 
-function decodePngNode(buffer) {
+export function decodePngNode(buffer) {
   let offset = 8;
   let width;
   let height;
@@ -479,7 +479,7 @@ function decodePngNode(buffer) {
   return { width, height, channels, data: out };
 }
 
-function diffPixels(a, b, threshold) {
+export function diffPixels(a, b, threshold) {
   const mask = new Uint8Array(a.width * a.height);
   let count = 0;
   for (let i = 0; i < a.width * a.height; i += 1) {
@@ -495,7 +495,7 @@ function diffPixels(a, b, threshold) {
   return { mask, count };
 }
 
-function edtNode(mask, W, H) {
+export function edtNode(mask, W, H) {
   const INF = 1e12;
   const n = Math.max(W, H);
   const f = new Float64Array(n);
