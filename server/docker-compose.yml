@@ -1,19 +1,20 @@
-version: "3.3"
-
 services:
   sprinkler-webserver:
     build:
       context: .
       dockerfile: Dockerfile
-    image: moulikbudhiraja/sprinkler-webserver:latest
-    ports:
-      - "5000:5000"
-    environment:
-      - MICROCONTROLLER_HOST=${MICROCONTROLLER_HOST}
-      - TZ=${TZ}
-
-    volumes:
-      - ${VOLUME_PATH}:/usr/app/data
-
     pull_policy: build
-    restart: always
+    ports:
+      - "127.0.0.1:${PORT:-5000}:5000"
+    environment:
+      SPRINKLER_DEMO: ${SPRINKLER_DEMO:?SPRINKLER_DEMO must be exactly 0 or 1}
+      SPRINKLER_PUBLIC_ORIGIN: ${SPRINKLER_PUBLIC_ORIGIN:-}
+      MICROCONTROLLER_HOST: ${MICROCONTROLLER_HOST:-}
+      TZ: ${TZ}
+      HOST: 0.0.0.0
+      PORT: 5000
+    volumes:
+      - ${VOLUME_PATH}:/app/data
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped

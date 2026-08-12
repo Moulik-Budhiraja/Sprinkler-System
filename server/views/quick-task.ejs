@@ -1,59 +1,6 @@
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <%- include("partials/head", { title: "Quick Task — Verdant" }) %>
-    <script src="/scripts/quick-task.js" defer></script>
-  </head>
-  <body>
-    <%- include("partials/topbar", { active: "quick" }) %>
-
-    <main class="shell" style="max-width: 720px">
-      <section class="hero reveal d1" style="padding-bottom: 18px">
-        <p class="hero__eyebrow">Manual Watering</p>
-        <h1>Quick <em>task</em>.</h1>
-        <p class="hero__lead">
-          Pick the zones, dial in a duration, and start watering right away.
-        </p>
-      </section>
-
-      <section class="panel form-panel reveal d2">
-        <div class="field">
-          <span class="field__label">Select Zones</span>
-          <div class="selectgrid" id="zoneGrid"></div>
-        </div>
-
-        <div class="divider"></div>
-
-        <div class="field" style="margin-bottom: 0">
-          <span class="field__label">Duration</span>
-          <input
-            type="number"
-            class="input task-duration"
-            id="duration"
-            placeholder="15"
-            min="1"
-            value="15"
-          />
-          <div class="presets" id="presets">
-            <button type="button" class="preset" data-min="5">5 min</button>
-            <button type="button" class="preset active" data-min="15">15 min</button>
-            <button type="button" class="preset" data-min="30">30 min</button>
-            <button type="button" class="preset" data-min="45">45 min</button>
-            <button type="button" class="preset" data-min="60">60 min</button>
-          </div>
-        </div>
-      </section>
-
-      <div class="actionbar reveal d3">
-        <button class="btn btn--water btn--lg btn--block save-btn" id="startBtn">
-          Start Watering
-        </button>
-      </div>
-
-      <a href="/" class="backlink reveal d3">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
-        Back to dashboard
-      </a>
-    </main>
-  </body>
-</html>
+<!doctype html><html lang="en"><head><%- include("partials/head", { title: "Quick Task — Living Yard" }) %><script src="/scripts/quick-task.js" defer></script></head>
+<body data-page="quick-task"><a class="skip-link" href="#main">Skip to main content</a><%- include("partials/topbar", { active: "home" }) %>
+<main id="main" class="shell editor-page quick-task-page"><header class="page-head"><h1>Quick Task</h1><p class="quick-task-context">Runs once, right now</p><p class="quick-task-precondition">Pick at least one zone to start · durations in minutes</p></header><section class="editor-form" aria-label="Quick Task">
+<fieldset class="form-field form-fieldset"><legend class="field-label">Zones</legend><div class="selectgrid" id="zoneGrid"></div></fieldset>
+<div class="form-field"><label class="field-label" for="duration">Minutes</label><input type="number" class="input task-duration" id="duration" min="1" max="1440" value="15"><div class="presets" id="presets"></div></div>
+<output class="feedback" id="taskFeedback" aria-live="polite"></output><div class="form-actions"><button class="btn btn--primary" id="startBtn" type="button" disabled>Start watering</button><a class="btn" href="/">Cancel</a></div></section></main><%- include("partials/mobile-nav", { active: "home" }) %></body></html>

@@ -1,81 +1,46 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-  <head>
-    <%- include("partials/head", { title: "Verdant — Irrigation Control" }) %>
-    <script src="/scripts/index.js" defer></script>
-  </head>
-  <body>
-    <%- include("partials/topbar", { active: "home" }) %>
+<head>
+  <%- include("partials/head", { title: "Living Yard — Sprinkler system" }) %>
+  <script src="/scripts/field.js" defer></script>
+  <script src="/scripts/index.js" defer></script>
+</head>
+<body data-page="dashboard">
+  <a class="skip-link" href="#main">Skip to main content</a>
+  <%- include("partials/topbar", { active: "home" }) %>
+  <main id="main" class="shell dashboard">
+    <header class="page-head"><h1>Today</h1></header>
 
-    <main class="shell">
-      <section class="hero reveal d1">
-        <p class="hero__eyebrow">Live System</p>
-        <h1>Good day in the <em>garden</em>.</h1>
-        <p class="hero__lead">
-          Monitor every zone, fire off a quick soak, and keep your schedules
-          running like clockwork — all from one calm console.
-        </p>
+    <section id="sprinklerField" class="lawn-field" data-dashboard-section="field" data-testid="field" aria-label="Sprinkler field"></section>
+    <output id="fieldMutationFeedback" class="field-mutation-feedback" aria-live="polite"></output>
 
-        <div class="statusline" id="statusline">
-          <div class="stat">
-            <span class="stat__dot idle" id="sysDot"></span>
-            <span class="stat__label">System</span>
-            <span class="stat__value" id="sysValue">Connecting…</span>
-          </div>
-          <div class="stat">
-            <span class="stat__dot water idle" id="zoneDot"></span>
-            <span class="stat__label">Watering</span>
-            <span class="stat__value" id="zoneValue">—</span>
-          </div>
-          <div class="stat">
-            <span class="stat__dot idle"></span>
-            <span class="stat__label">Schedules</span>
-            <span class="stat__value" id="schedValue">—</span>
-          </div>
-        </div>
-      </section>
+    <section class="section-block" data-dashboard-section="schedules" aria-labelledby="schedulesHeading">
+      <header class="section-head"><h2 id="schedulesHeading">Schedules</h2><a href="/schedules">All schedules</a></header>
+      <div id="schedules" class="schedule-list" aria-live="polite"><p class="empty">No schedules</p></div>
+    </section>
 
-      <!-- ZONE MAP -->
-      <section class="section reveal d2">
-        <div class="section__head">
-          <h2>Zones <span class="section__count" id="zoneCount"></span></h2>
-        </div>
-        <div class="zonemap" id="zonemap"></div>
-      </section>
+    <section class="section-block" data-dashboard-section="history" aria-labelledby="historyHeading">
+      <header class="section-head"><h2 id="historyHeading">History</h2><a href="/activity">All activity</a></header>
+      <div id="history" class="history-list" aria-live="polite"><p class="empty">No history</p></div>
+    </section>
+    <div class="freshness-line"><span data-testid="controller-freshness" aria-live="polite">Controller status current</span><button class="text-action" id="refreshController" type="button" aria-label="Refresh controller status">Refresh</button></div>
 
-      <!-- CURRENT TASKS -->
-      <section class="section reveal d3">
-        <div class="section__head">
-          <h2>Running Now <span class="section__count" id="taskCount"></span></h2>
-          <a href="/quick-task"><button class="btn btn--water btn--sm">+ Quick Task</button></a>
+    <section class="qt-island" data-testid="quick-task-island" aria-labelledby="quickTaskHeading" hidden>
+      <form id="quickTaskForm">
+        <div class="qt-island-head">
+          <div class="qt-copy"><h2 class="qt-heading" id="quickTaskHeading" data-testid="quick-task-heading">Quick Task</h2><span class="qt-context">Runs once, right now</span></div>
+          <output class="qt-island-zones" id="quickTaskZones" data-testid="quick-task-zones"></output>
+          <button class="qt-close" id="quickTaskClose" type="button" aria-label="Close Quick Task and deselect all zones"><span aria-hidden="true">✕</span></button>
         </div>
-        <div class="card-grid" id="tasks">
-          <div class="empty">Connecting to controller…</div>
+        <p class="qt-hint">Pick at least one zone to start · durations in minutes</p>
+        <div class="qt-island-controls">
+          <div id="quickDurations" class="qt-durations" role="group" aria-label="Duration"></div>
+          <button class="qt-start" type="submit" disabled>Start</button>
         </div>
-      </section>
-
-      <!-- SCHEDULES -->
-      <section class="section reveal d4">
-        <div class="section__head">
-          <h2>Schedules <span class="section__count" id="schedCount"></span></h2>
-          <a href="/create-schedule"><button class="btn btn--primary btn--sm">+ New Schedule</button></a>
-        </div>
-        <div class="card-grid" id="schedules">
-          <div class="empty">Loading schedules…</div>
-        </div>
-      </section>
-
-      <!-- HISTORY -->
-      <section class="section reveal d5">
-        <div class="section__head">
-          <h2>History</h2>
-        </div>
-        <div class="panel" style="padding: 8px 22px">
-          <div class="timeline" id="history">
-            <div class="empty" style="border: none; background: none">Loading history…</div>
-          </div>
-        </div>
-      </section>
-    </main>
-  </body>
+        <output id="quickMessage" class="qt-feedback" aria-live="polite"></output>
+      </form>
+    </section>
+  </main>
+  <%- include("partials/mobile-nav", { active: "home" }) %>
+</body>
 </html>

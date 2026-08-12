@@ -1,0 +1,113 @@
+{
+  "route": "/",
+  "state": "explicit synthetic demo with deterministic clean browser context",
+  "artifacts": {
+    "desktop-1440-copy.png": {
+      "view": "full-window",
+      "state": "default",
+      "requiredVisibleText": [
+        "Living Yard",
+        "Sprinkler system",
+        "Today",
+        "Status",
+        "Schedules",
+        "History",
+        "Morning lawn",
+        "Zones 1, 2 started"
+      ],
+      "viewport": [
+        1440,
+        900
+      ],
+      "dimensions": [
+        1440,
+        900
+      ],
+      "sha256": "e88a2ecfedbae420c6576d8ee5d0141e176c07aa9aa8ca1a39632ea2d4e04e7d"
+    },
+    "desktop-1440-standalone.png": {
+      "view": "full-window",
+      "state": "zone-selected",
+      "requiredVisibleText": [
+        "Living Yard",
+        "Sprinkler system",
+        "Today",
+        "Schedules",
+        "History",
+        "Quick Task",
+        "Start"
+      ],
+      "viewport": [
+        1440,
+        900
+      ],
+      "dimensions": [
+        1440,
+        900
+      ],
+      "sha256": "83a5b321ba465b668e8a7fe3f42adebed2c98144248d15d6ce7dcc6126708500"
+    },
+    "mobile-844-copy.png": {
+      "view": "full-document",
+      "state": "default",
+      "requiredVisibleText": [
+        "Sprinkler system",
+        "Today",
+        "Status",
+        "Schedules",
+        "History",
+        "Morning lawn",
+        "Zones 1, 2 started"
+      ],
+      "viewport": [
+        390,
+        844
+      ],
+      "dimensions": [
+        390,
+        1135
+      ],
+      "sha256": "a23dcba4ed5384e6ca70402e8b46be0233698d564f771a6dd4d5ba9457fed9bc"
+    },
+    "mobile-1067-copy.png": {
+      "view": "device-fold",
+      "state": "default",
+      "requiredVisibleText": [
+        "Sprinkler system",
+        "Today",
+        "Status",
+        "Schedules",
+        "Morning lawn"
+      ],
+      "viewport": [
+        390,
+        1067
+      ],
+      "dimensions": [
+        390,
+        1067
+      ],
+      "sha256": "dcf13fba028de8f97e7e15eac67444407b4e803c237263df1ca01752da4c55cc"
+    },
+    "mobile-390x844-standalone.png": {
+      "view": "device-fold",
+      "state": "zone-selected",
+      "requiredVisibleText": [
+        "Sprinkler system",
+        "Quick Task",
+        "Start",
+        "Schedules",
+        "Today"
+      ],
+      "viewport": [
+        390,
+        844
+      ],
+      "dimensions": [
+        390,
+        844
+      ],
+      "sha256": "58feb988601c9e311743f36c12ace7d8f64649a28749eb786adad135094ff701"
+    }
+  }
+}

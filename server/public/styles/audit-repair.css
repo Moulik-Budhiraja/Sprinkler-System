@@ -1,0 +1,145 @@
+/* Exact audit-repair layout contract layered over the approved V4 artwork. */
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.mobile-product-heading{margin:0;font-size:26px;line-height:calc(17 / 13)}
+.dashboard{grid-template-columns:minmax(0,497fr) minmax(0,603fr)}
+.qt-feedback:empty{display:none}
+.field-mutation-feedback{display:block;min-height:18px;margin:6px 2px 0;color:var(--amber);font-size:12px}.field-mutation-feedback:empty{display:none}
+.lawn-field{position:relative;border-radius:18px;background:#0d1815;aspect-ratio:1140/560}
+.section-head,.data-page-head,.schedule-row-top,.schedule-actions,.form-actions,.freshness-line{display:flex;align-items:center}
+.section-head{justify-content:space-between;flex-wrap:wrap;gap:0 14px;border-bottom:1px solid var(--line)}
+.section-head h2{font-size:18px}
+.section-head a,.text-action{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;padding:0 8px;border:0;background:transparent;color:var(--water);font-size:13px;text-decoration:none}
+.schedule-summary-row,.schedule-data-row,.history-row{border-bottom:1px solid var(--line)}
+.schedule-summary-row{display:grid;grid-template-columns:minmax(0,1fr);padding:8px 0;min-height:54px;color:inherit}
+a.schedule-summary-row:hover{background:var(--terrain);text-decoration:none}
+.schedule-data-row.is-highlighted{outline:2px solid var(--water);outline-offset:4px;border-radius:4px}
+.schedule-data-row:focus{outline:2px solid var(--focus);outline-offset:4px;border-radius:4px}
+.schedule-row-top{gap:12px;min-width:0}.schedule-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.schedule-state{color:var(--text-muted);font-size:12px}.schedule-state::before{content:"●";margin-right:6px;color:var(--green)}.schedule-time{margin-left:auto;color:var(--water);white-space:nowrap}
+.schedule-summary-meta,.schedule-days,.schedule-sequence,.schedule-last,.history-reason{color:var(--text-muted);font-size:12px}
+.schedule-data-row{display:grid;grid-template-columns:1.15fr .85fr 2fr 1fr auto;gap:18px;align-items:center;min-height:76px;padding:10px 0}.schedule-data-row .schedule-row-top{display:grid;grid-template-columns:1fr auto}.schedule-data-row .schedule-time{grid-column:1/-1;margin-left:0}.schedule-actions{gap:4px}.danger-action{color:var(--coral)}.row-feedback{grid-column:1/-1;margin:0;color:var(--coral);font-size:12px}
+.history-row{display:flex;align-items:flex-start;gap:10px;min-height:48px;padding:8px 0}
+.history-icon{flex-shrink:0;width:16px;line-height:20px;text-align:center;font-size:12px}
+.history-icon::before{content:"●";color:var(--green)}
+.history-icon.stopped::before{content:"■";color:var(--text-muted)}
+.history-icon.outcome-unknown::before{content:"■";color:var(--amber)}
+.history-body{flex:1;min-width:0;display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;column-gap:12px;row-gap:2px}
+.history-primary{margin:0;font-weight:600;color:var(--text);font-size:13.5px;line-height:calc(40 / 27)}
+.history-meta{margin:0;color:var(--text-muted);font-size:12px;line-height:1.5}
+.history-meta time{font-family:var(--font-mono)}
+.history-date{margin-top:22px;padding-bottom:8px;border-bottom:1px solid var(--line);font-size:14px;color:var(--text-muted)}
+.data-page,.editor-page{max-width:1220px}.data-page-head{justify-content:space-between;margin-bottom:24px}.status-page{padding-top:20px}.status-head{display:flex;align-items:end;justify-content:space-between;height:54px;padding-bottom:12px}.status-field{width:min(1140px,100%);height:700px;aspect-ratio:auto}.freshness-line{gap:8px;color:var(--text-muted);font-size:12px}.status-head [data-testid="controller-freshness"][data-state="live"]+button{display:none}.dashboard>.freshness-line{grid-column:1/-1}
+.controller-lines,.editor-form{border-top:1px solid var(--line)}.editor-page{max-width:920px}.editor-page .page-head{margin-bottom:22px}.editor-form{padding-top:20px}.form-field{min-width:0}.form-fieldset{margin:0;padding:0;border:0}.selectgrid,.presets,.builder-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.choice{position:relative;width:44px;height:44px}.choice input{position:absolute;inset:0;width:44px;height:44px;margin:0;opacity:0;cursor:pointer}.choice label{display:grid;place-items:center;width:44px;height:44px;border:1px solid var(--line);border-radius:8px;font-family:var(--font-mono);color:var(--text-muted)}.choice input:checked+label{border-color:var(--water);color:var(--water);background:rgba(95,212,232,.08)}.choice input:focus-visible+label{outline:2px solid var(--focus);outline-offset:2px}
+.task-section,.builder{margin-top:22px;padding-top:18px;border-top:1px solid var(--line)}.builder{display:grid;grid-template-columns:1fr auto;gap:18px;align-items:end}.builder-controls{align-items:end}.builder-controls .input{width:112px}.builder-task{min-height:52px}.builder-task-info{flex:1}.form-actions{gap:8px;margin-top:20px;padding-top:16px;border-top:1px solid var(--line)}.preset{min-width:58px;min-height:44px;border:1px solid var(--line);border-radius:8px;background:transparent}.preset.active{border-color:var(--water);color:var(--water)}.quick-task-page .input{max-width:180px;margin-bottom:10px}.quick-task-context,.quick-task-precondition{margin:3px 0 0;color:var(--text-muted);font-size:12px}.quick-task-precondition{font-size:11px}.feedback{display:block}.empty,.quiet{color:var(--text-muted)}
+@media(max-width:899px){
+ .mobile-header{min-height:114px;height:auto;padding:16px 16px 0}.controller-status{margin-top:5px;min-height:22px}.header-divider{margin-top:12px}.shell{padding:18px 16px 32px}.shell.dashboard{width:100%;padding:0;gap:0}.dashboard .lawn-field{width:100%;height:400px;border-radius:0;margin-bottom:56px}.dashboard .section-block{padding:18px 16px 0}.mobile-nav{grid-template-columns:repeat(5,1fr)}.mobile-nav a,a,button,label[for],.skip-link{min-height:44px}
+ .dashboard>.freshness-line{padding:10px 16px 166px}.dashboard>.freshness-line,.dashboard>.freshness-line button{scroll-margin-block-end:170px}.status-page{width:100%;padding:0;position:relative}.status-head{position:absolute;z-index:3;top:8px;left:16px;height:44px;padding:0}.status-head:has([data-state="live"]){display:none}.status-head h1{display:none}.status-head .freshness-line span{position:absolute;left:-9999px}.status-field{width:100%;height:min(738px,calc(100dvh - var(--mobile-header-h, 114px) - 114px));border-radius:0}.data-page,.editor-page{padding-bottom:76px}.page-head h1{font-size:28px}.schedule-data-row{grid-template-columns:1fr auto;gap:6px 12px;padding:12px 0}.schedule-data-row .schedule-row-top,.schedule-data-row .schedule-sequence{grid-column:1/-1}.schedule-actions{justify-self:end}.form-grid,.builder{grid-template-columns:1fr}.form-field+.form-field{margin-top:14px}.builder-controls .form-field{margin-top:0}.form-actions{flex-wrap:wrap}.form-actions>*{flex:1 1 44%}
+}
+/* design repair — real 200% zoom resilience:
+ * the data-page header wraps instead of overflowing once the title and its
+ * action can no longer share one line (200% page zoom halves the layout
+ * viewport), and the decorative history glyph is sized in em so 200% text
+ * zoom grows its box with the glyph instead of bleeding out of the row.
+ * History metadata must never be nowrap: below ~195px (160px is the 200%
+ * page-zoom equivalence of a 320px phone) a one-line meta is wider than
+ * the layout viewport and forces real sideways document scroll; letting it
+ * wrap changes nothing at any width where the line fits, because a flex
+ * item's line placement uses the same one-line hypothetical size. */
+.data-page-head{flex-wrap:wrap;gap:10px 14px}
+.history-icon{width:calc(4em / 3);line-height:calc(5 / 3)}
+/* At ultra-narrow layout viewports (real 200% page zoom of a phone) the
+ * full Remove pill would span neighbouring silhouettes; collapse it to its
+ * 44px coupler-icon form — the aria-label keeps the full name. */
+@media(max-width:259px){.remove-btn .remove-text{display:none}.remove-btn{min-width:44px;justify-content:center;padding:8px 10px}}
+/* design repair — legibility under zoom stress:
+ * 1) Bottom navigation: labels are never clipped. Links keep their full
+ *    text (44px minimum target); when the five full labels no longer fit
+ *    (195px zoom-equivalence width, 200% text zoom) the nav itself scrolls
+ *    horizontally, so every destination stays readable and reachable while
+ *    the fixed bar and its safe-area padding are preserved.
+ * 2) Today schedule names wrap instead of truncating to an ellipsis stub:
+ *    the deep link's primary identifier stays fully painted at any width
+ *    or text scale; the time drops to its own line when the row is tight.
+ * 3) The skip link meets the 44px target size in every state and at every
+ *    width, not only inside the mobile media block or under :focus. */
+@media(max-width:899px){
+ .mobile-nav{display:flex;align-items:stretch;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
+ .mobile-nav::-webkit-scrollbar{display:none}
+ .mobile-nav a{flex:1 0 auto;min-width:44px;padding:0 8px;white-space:nowrap;overflow:visible}
+}
+.schedule-row-top{flex-wrap:wrap}
+.schedule-name{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:break-word}
+.skip-link{min-width:44px;min-height:44px;box-sizing:border-box;display:flex;align-items:center}
+/* design repair — nav overflow affordance: sticky, pointer-transparent
+ * edge hints (gradient + chevron) that appear only while the nav actually
+ * overflows and only on the side with hidden destinations. Zero footprint
+ * when everything fits. */
+.mobile-nav .nav-scroll-hint{position:sticky;z-index:1;flex:0 0 0px;align-self:stretch;pointer-events:none;opacity:0;display:flex;align-items:center;overflow:hidden}
+.mobile-nav.nav-overflowing .nav-scroll-hint{flex-basis:16px}
+.mobile-nav .nav-scroll-hint-left{left:0;justify-content:flex-start;background:linear-gradient(to right,var(--surface) 30%,transparent)}
+.mobile-nav .nav-scroll-hint-right{right:0;justify-content:flex-end;background:linear-gradient(to left,var(--surface) 30%,transparent)}
+.mobile-nav .nav-scroll-hint::after{content:"";width:7px;height:7px;border-right:2px solid var(--water);border-top:2px solid var(--water)}
+.mobile-nav .nav-scroll-hint-right::after{transform:rotate(45deg);margin-right:3px}
+.mobile-nav .nav-scroll-hint-left::after{transform:rotate(-135deg);margin-left:3px}
+.mobile-nav.nav-overflowing:not(.nav-at-end) .nav-scroll-hint-right{opacity:1}
+.mobile-nav.nav-overflowing:not(.nav-at-start) .nav-scroll-hint-left{opacity:1}
+/* design repair — neighbour-aware dock compaction: when no clear span fits
+ * the full Remove pill between neighbour silhouettes and the lawn edges
+ * (text scaling at narrow widths), field.js collapses the dock to its 44px
+ * coupler-icon form; the aria-label keeps the complete name. */
+.zone-dock.dock-compact .remove-text{display:none}
+.zone-dock.dock-compact .remove-btn{min-width:44px;justify-content:center;padding:8px 10px}
+/* design repair — /schedules rows under text zoom: the rigid five-track
+ * grid starved the name to 0-8px at 900-1100px once fonts doubled. At
+ * desktop widths the row is a wrap-capable flex line with em-based track
+ * minimums (they scale with the text), so doubled text wraps metadata to
+ * new lines instead of crushing the identifier or overprinting the
+ * status; column alignment at normal zoom is preserved via matching
+ * grow factors. Mobile (<=899px) keeps its proven stacked grid. */
+@media(min-width:900px){
+ .schedule-data-row{display:flex;flex-wrap:wrap;column-gap:18px;row-gap:4px}
+ .schedule-data-row .schedule-row-top{flex:1.15 1 9em;min-width:0;display:flex;flex-wrap:wrap;align-items:center;column-gap:12px;row-gap:2px}
+ .schedule-data-row .schedule-row-top .schedule-name{flex:1 1 auto;min-width:0}
+ .schedule-data-row .schedule-row-top .schedule-state{flex:0 0 auto}
+ .schedule-data-row .schedule-time{flex:1 1 100%;margin-left:0}
+ .schedule-data-row .schedule-days{flex:.85 1 5em;min-width:0}
+ .schedule-data-row .schedule-sequence{flex:2 1 8em;min-width:0}
+ .schedule-data-row .schedule-last{flex:1 1 5em;min-width:0}
+ .schedule-data-row .schedule-actions{flex:0 0 auto;margin-left:auto}
+ .schedule-data-row .row-feedback{flex:1 1 100%}
+}
+/* design repair — document-anchored island on insufficient-height
+ * desktops: positioned in the dashboard just below the field over a
+ * reserved band (Schedules/History shift down), it scrolls WITH the page
+ * — never covering the field and never restricting scroll or focus. */
+/* Docked, the island is scrolling DOCUMENT content: it must layer below
+ * the fixed mobile nav (z-index 20) so destinations are never painted
+ * over while the island crosses the nav band, yet above normal flow
+ * content in its reserved band. The fixed-mode island keeps z-index 30 —
+ * it never overlaps the nav by construction. */
+.qt-island.qt-island-docked{position:absolute;top:var(--qt-island-top,auto);right:40px;bottom:auto;left:auto;z-index:10}
+.shell.dashboard.quick-task-docked [data-dashboard-section="schedules"]{margin-top:var(--qt-island-band,0px)}
+@media(min-width:900px){.shell.dashboard.quick-task-docked [data-dashboard-section="history"]{margin-top:var(--qt-island-band,0px)}}
+/* design repair — hit-shaped zone activation: the tap region is the
+ * sprinkler silhouette plus a generous >=44px halo (the transparent
+ * .hit-proxy rect), not the whole overlapping wrap — so neighbouring
+ * wraps stop stealing taps and anchored docks can guarantee clearance
+ * from every zone's REAL activation region. Focus/keyboard unchanged. */
+.field-zone{pointer-events:none}
+.field-zone .hit-proxy{fill:transparent;stroke:none;pointer-events:auto}
+.field-zone .c-riser,.field-zone .c-collar,.field-zone .c-head,.field-zone .c-nozzle,.field-zone .c-skirt,.field-zone .sprinkler-number{pointer-events:auto}
+/* design repair — mobile island docking: below 900px the docked island
+ * keeps the mobile edge insets, only the SCHEDULES section shifts down
+ * (the stacked flow moves everything after it), and reveal-scrolling
+ * accounts for the fixed bottom navigation. */
+.qt-island.qt-island-docked{scroll-margin-block:8px 32px}
+@media(max-width:899px){
+ .qt-island.qt-island-docked{left:10px;right:10px;scroll-margin-block:8px 84px}
+}
+/* At ultra-narrow layout viewports (200% page-zoom equivalence) the four
+ * duration presets cannot share one row with 44px targets; the grid wraps
+ * to 2x2 and the controls row wraps, keeping every target >=44px with no
+ * horizontal overflow. */
+@media(max-width:259px){
+ .qt-durations{grid-template-columns:repeat(2,minmax(44px,56px))}
+ .qt-island-controls{flex-wrap:wrap;row-gap:8px}
+}

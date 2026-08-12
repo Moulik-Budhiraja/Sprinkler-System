@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <%- include("partials/head", { title: "Sprinkler Status — Living Yard" }) %>
+  <script src="/scripts/field.js" defer></script>
+  <script src="/scripts/index.js" defer></script>
+</head>
+<body data-page="status">
+  <a class="skip-link" href="#main">Skip to main content</a>
+  <%- include("partials/topbar", { active: "status" }) %>
+  <main id="main" class="shell status-page">
+    <header class="page-head status-head"><h1>Sprinkler Status</h1><div class="freshness-line"><span data-testid="controller-freshness" aria-live="polite">Controller status current</span><button class="text-action" id="refreshController" type="button" aria-label="Refresh controller status">Refresh</button></div></header>
+    <section id="sprinklerField" class="lawn-field status-field" data-testid="status-field" aria-label="Sprinkler status field"></section>
+    <output id="fieldMutationFeedback" class="field-mutation-feedback" aria-live="polite"></output>
+  </main>
+  <%- include("partials/mobile-nav", { active: "status" }) %>
+</body>
+</html>

@@ -1,12 +1,19 @@
 {
-  "name": "server",
+  "name": "sprinkler-system-server",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "private": true,
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "description": "Sprinkler controller web interface",
+  "main": "app.js",
   "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node app.js"
+    "start": "node app.js",
+    "test": "node --test --test-concurrency=1 tests/*.test.js",
+    "test:browser": "playwright test",
+    "test:all": "npm test && npm run test:browser",
+    "check": "node --check app.js && node --check repository.js && node --check validation.js && node --check helpers.js && node --check public/scripts/header-status.js && node --check public/scripts/quick-task-contract.js && node --check public/scripts/mutation-recovery.js && node --check public/scripts/field.js && node --check public/scripts/index.js && node --check public/scripts/controller.js && node --check public/scripts/quick-task.js && node --check public/scripts/create-schedule.js && node --check public/scripts/edit-schedule.js"
   },
   "author": "",
   "license": "ISC",
@@ -15,6 +22,11 @@
     "dotenv": "^16.3.1",
     "ejs": "^3.1.9",
     "express": "^4.18.2",
-    "uuid": "^9.0.0"
+    "uuid": "^14.0.1"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.10.2",
+    "@playwright/test": "^1.54.2",
+    "supertest": "^7.1.4"
   }
 }
